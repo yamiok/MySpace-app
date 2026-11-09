@@ -1,1 +1,20 @@
 
+
+{
+  "name": "MySpace",
+  "short_name": "MySpace",
+  "description": "Your Private Space",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1769d2",
+  "icons": [
+    {
+      "src": "./icons/myspace-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}
