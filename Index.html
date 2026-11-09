@@ -1,1 +1,745 @@
 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/myspace-1024.png">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1769d2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MySpace">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>MySpace</title>
+
+<style>
+:root {
+  --blue:#1769d2;
+  --dark:#104b9b;
+  --light:#eaf3ff;
+  --bg:#f4f8ff;
+  --text:#18304f;
+  --muted:#71839c;
+  --white:#fff;
+  --border:#dce8f6;
+  --danger:#c43d48;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+header {
+  background:linear-gradient(135deg,var(--blue),#5aa4f5);
+  color:white;
+  padding:25px 20px 24px;
+  border-radius:0 0 26px 26px;
+}
+.header-row { display:flex;align-items:center;gap:12px; }
+.logo {
+  width:48px;height:48px;border-radius:15px;
+  display:grid;place-items:center;
+  background:white;color:var(--blue);
+  font-size:25px;font-weight:900;
+}
+h1 { margin:0;font-size:26px; }
+header p { margin:8px 0 0;opacity:.9; }
+main { max-width:650px;margin:auto;padding:18px 15px 110px; }
+.welcome {
+  background:white;border:1px solid var(--border);
+  border-radius:18px;padding:17px;margin-bottom:17px;
+}
+.welcome strong { color:var(--blue);font-size:18px; }
+.grid {
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+.tile {
+  border:1px solid var(--border);background:white;
+  border-radius:18px;padding:18px 13px;
+  text-align:left;min-height:112px;color:var(--text);
+  font:inherit;cursor:pointer;
+}
+.tile:active { transform:scale(.98); }
+.tile .emoji { font-size:27px;display:block;margin-bottom:9px; }
+.tile strong { display:block;font-size:16px; }
+.tile small { color:var(--muted); }
+.panel {
+  display:none;background:white;border:1px solid var(--border);
+  border-radius:18px;padding:17px;margin-top:15px;
+}
+.panel.active { display:block; }
+.panel h2 { margin:0 0 15px;color:var(--blue);font-size:21px; }
+button,.button {
+  border:0;border-radius:12px;padding:12px 15px;
+  background:var(--blue);color:white;font-weight:650;
+  font-size:14px;cursor:pointer;
+}
+button.secondary,.button.secondary {
+  background:var(--light);color:var(--blue);
+}
+button.danger { background:#fff0f0;color:var(--danger); }
+input,textarea,select {
+  display:block;width:100%;padding:13px;margin:9px 0;
+  border:1px solid var(--border);border-radius:12px;
+  font:inherit;color:var(--text);background:white;
+}
+textarea { min-height:110px;resize:vertical; }
+.actions { display:flex;flex-wrap:wrap;gap:8px;margin:10px 0; }
+.item {
+  border:1px solid var(--border);border-radius:13px;
+  padding:13px;margin:10px 0;overflow-wrap:anywhere;
+}
+.item h3 { margin:0 0 7px;font-size:16px; }
+.item p { white-space:pre-wrap;margin:6px 0;color:#52657e; }
+.item small { color:var(--muted); }
+.item img { width:100%;max-height:260px;object-fit:contain;border-radius:10px; }
+.bottom {
+  position:fixed;bottom:0;left:0;right:0;
+  padding:12px 15px calc(12px + env(safe-area-inset-bottom));
+  background:rgba(255,255,255,.96);
+  border-top:1px solid var(--border);
+  display:flex;justify-content:space-around;
+}
+.bottom button {
+  background:transparent;color:var(--muted);
+  padding:8px;font-size:12px;
+}
+.bottom button.selected { color:var(--blue); }
+.muted { color:var(--muted);font-size:13px; }
+.notice {
+  background:#fff8e7;color:#795a19;
+  padding:12px;border-radius:12px;font-size:13px;
+  line-height:1.5;margin:12px 0;
+}
+.hidden { display:none!important; }
+#lockScreen {
+  position:fixed;inset:0;z-index:20;background:#f4f8ff;
+  display:none;align-items:center;justify-content:center;padding:22px;
+}
+.lock-card {
+  width:100%;max-width:380px;background:white;
+  border-radius:22px;padding:25px;text-align:center;
+  border:1px solid var(--border);
+}
+.lock-card .logo { margin:auto auto 15px; }
+footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
+</style>
+</head>
+
+<body>
+
+<div id="lockScreen">
+  <div class="lock-card">
+    <div class="logo">🔐</div>
+    <h2>MySpace Locked</h2>
+    <p class="muted">Enter your app password to continue.</p>
+    <input id="appUnlock" type="password" placeholder="App password" autocomplete="current-password">
+    <button onclick="unlockApp()">Unlock MySpace</button>
+    <p id="lockError" class="muted"></p>
+  </div>
+</div>
+
+<header>
+  <div class="header-row">
+    <div class="logo">M</div>
+    <div>
+      <h1>MySpace</h1>
+      <div>Your Private Space</div>
+    </div>
+  </div>
+  <p>Your personal space, organized in one place.</p>
+</header>
+
+<main>
+  <div id="home">
+    <div class="welcome">
+      <strong>Welcome to MySpace</strong>
+      <p class="muted">Your notes, photos, files, reminders and private secrets.</p>
+    </div>
+
+    <div class="grid">
+      <button class="tile" onclick="showPanel('notes')">
+        <span class="emoji">📝</span>
+        <strong>My Notes</strong>
+        <small>Text and voice notes</small>
+      </button>
+      <button class="tile" onclick="showPanel('photos')">
+        <span class="emoji">📷</span>
+        <strong>My Photos</strong>
+        <small>Private photo collection</small>
+      </button>
+      <button class="tile" onclick="showPanel('files')">
+        <span class="emoji">📁</span>
+        <strong>My Files</strong>
+        <small>Documents and files</small>
+      </button>
+      <button class="tile" onclick="showPanel('reminders')">
+        <span class="emoji">🔔</span>
+        <strong>My Reminders</strong>
+        <small>Personal reminders</small>
+      </button>
+      <button class="tile" onclick="showPanel('vault')">
+        <span class="emoji">🔐</span>
+        <strong>Special Secrets</strong>
+        <small>Encrypted private vault</small>
+      </button>
+      <button class="tile" onclick="showPanel('settings')">
+        <span class="emoji">⚙️</span>
+        <strong>Settings</strong>
+        <small>App security and options</small>
+      </button>
+    </div>
+  </div>
+
+  <section id="notes" class="panel">
+    <h2>📝 My Notes</h2>
+    <input id="noteTitle" placeholder="Note title">
+    <textarea id="noteText" placeholder="Write your note here..."></textarea>
+    <div class="actions">
+      <button onclick="saveNote()">Save Note</button>
+      <button class="secondary" onclick="startRecording()">🎙 Record</button>
+      <button class="secondary" onclick="stopRecording()">Stop Recording</button>
+    </div>
+    <p id="recordStatus" class="muted"></p>
+    <div id="notesList"></div>
+  </section>
+
+  <section id="photos" class="panel">
+    <h2>📷 My Photos</h2>
+    <p class="muted">Choose photos to store inside MySpace.</p>
+    <input id="photoInput" type="file" accept="image/*" multiple>
+    <button onclick="addPhotos()">Add Photos</button>
+    <div id="photosList"></div>
+  </section>
+
+  <section id="files" class="panel">
+    <h2>📁 My Files</h2>
+    <p class="muted">Import documents and other files into MySpace.</p>
+    <input id="fileInput" type="file" multiple>
+    <button onclick="addFiles()">Add Files</button>
+    <div id="filesList"></div>
+  </section>
+
+  <section id="reminders" class="panel">
+    <h2>🔔 My Reminders</h2>
+    <input id="reminderTitle" placeholder="Reminder title">
+    <input id="reminderDate" type="datetime-local">
+    <textarea id="reminderDetails" placeholder="Details (optional)"></textarea>
+    <button onclick="saveReminder()">Save Reminder</button>
+    <div class="notice">Notifications are checked while MySpace is open. This prototype cannot reliably schedule notifications while the app is closed.</div>
+    <button class="secondary" onclick="enableNotifications()">Enable Notifications</button>
+    <div id="remindersList"></div>
+  </section>
+
+  <section id="vault" class="panel">
+    <h2>🔐 Special Secrets</h2>
+    <div id="vaultSetup">
+      <p>Create your vault master password and six-digit PIN.</p>
+      <input id="masterNew" type="password" placeholder="Create master password">
+      <input id="pinNew" type="password" inputmode="numeric" maxlength="6" placeholder="Create six-digit PIN">
+      <input id="pinConfirm" type="password" inputmode="numeric" maxlength="6" placeholder="Confirm PIN">
+      <button onclick="createVault()">Create Private Vault</button>
+    </div>
+
+    <div id="vaultLogin" class="hidden">
+      <p class="muted">Unlock your encrypted vault.</p>
+      <input id="masterLogin" type="password" placeholder="Master password">
+      <input id="pinLogin" type="password" inputmode="numeric" maxlength="6" placeholder="Six-digit PIN">
+      <button onclick="unlockVault()">Unlock Vault</button>
+      <p id="vaultError" class="muted"></p>
+    </div>
+
+    <div id="vaultContent" class="hidden">
+      <p class="muted">Your entries are encrypted before being saved.</p>
+      <select id="secretCategory">
+        <option>Passwords</option>
+        <option>Recovery</option>
+        <option>Personal</option>
+        <option>Property</option>
+        <option>Other</option>
+      </select>
+      <input id="secretTitle" placeholder="Account or item name">
+      <textarea id="secretValue" placeholder="Private information"></textarea>
+      <button onclick="saveSecret()">Save Secret</button>
+      <div id="secretsList"></div>
+      <button class="secondary" onclick="lockVault()">Lock Vault</button>
+    </div>
+  </section>
+
+  <section id="settings" class="panel">
+    <h2>⚙️ Settings</h2>
+    <p>MySpace stores information in this browser on this device.</p>
+    <div class="notice">
+      This prototype does not yet implement native iPhone Face ID protection. Its app password screen is not a substitute for iOS-level biometric security.
+    </div>
+    <button class="secondary" onclick="setAppPassword()">Set or Change App Password</button>
+    <button class="secondary" onclick="lockApp()">Lock MySpace</button>
+    <button class="danger" onclick="clearAllData()">Delete All MySpace Data</button>
+    <p class="muted">Deleting data is permanent. Export anything you need first.</p>
+  </section>
+</main>
+
+<nav class="bottom">
+  <button class="selected" onclick="goHome(this)">🏠<br>Home</button>
+  <button onclick="showPanel('notes',this)">📝<br>Notes</button>
+  <button onclick="showPanel('photos',this)">📷<br>Photos</button>
+  <button onclick="showPanel('files',this)">📁<br>Files</button>
+  <button onclick="showPanel('settings',this)">⚙️<br>Settings</button>
+</nav>
+
+<footer>MySpace · Your Private Space</footer>
+
+<script>
+"use strict";
+
+const DB_NAME = "MySpaceDatabase";
+const DB_VERSION = 1;
+let db;
+let recorder = null;
+let recordingChunks = [];
+let vaultKey = null;
+let vaultPin = null;
+let appPassword = null;
+
+function openDB() {
+  return new Promise((resolve,reject) => {
+    const request = indexedDB.open(DB_NAME,DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      ["notes","photos","files","reminders","secrets","settings"].forEach(name => {
+        if (!database.objectStoreNames.contains(name)) {
+          database.createObjectStore(name,{keyPath:"id",autoIncrement:true});
+        }
+      });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function store(name,mode="readonly") {
+  return db.transaction(name,mode).objectStore(name);
+}
+
+function addRecord(name,value) {
+  return new Promise((resolve,reject) => {
+    const request = store(name,"readwrite").add(value);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function getAll(name) {
+  return new Promise((resolve,reject) => {
+    const request = store(name).getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function removeRecord(name,id) {
+  return new Promise((resolve,reject) => {
+    const request = store(name,"readwrite").delete(Number(id));
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function setting(key,value) {
+  return new Promise((resolve,reject) => {
+    const request = store("settings","readwrite").put({key,value});
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function getSetting(key) {
+  return new Promise((resolve,reject) => {
+    const request = store("settings").get(key);
+    request.onsuccess = () => resolve(request.result?.value);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function showPanel(id,button) {
+  document.getElementById("home").style.display="none";
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  document.querySelectorAll(".bottom button").forEach(b=>b.classList.remove("selected"));
+  if(button) button.classList.add("selected");
+  if(id==="notes") renderNotes();
+  if(id==="photos") renderPhotos();
+  if(id==="files") renderFiles();
+  if(id==="reminders") renderReminders();
+  if(id==="vault") prepareVault();
+}
+
+function goHome(button) {
+  document.getElementById("home").style.display="block";
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  document.querySelectorAll(".bottom button").forEach(b=>b.classList.remove("selected"));
+  button.classList.add("selected");
+}
+
+async function saveNote() {
+  const title=document.getElementById("noteTitle").value.trim();
+  const text=document.getElementById("noteText").value.trim();
+  if(!title&&!text) return alert("Enter a note first.");
+  await addRecord("notes",{title,text,created:new Date().toISOString()});
+  document.getElementById("noteTitle").value="";
+  document.getElementById("noteText").value="";
+  renderNotes();
+}
+
+async function renderNotes() {
+  const list=document.getElementById("notesList");
+  const records=await getAll("notes");
+  list.innerHTML="";
+  records.reverse().forEach(item=>{
+    const el=document.createElement("div");
+    el.className="item";
+    const h=document.createElement("h3");h.textContent=item.title||"Untitled";
+    const p=document.createElement("p");p.textContent=item.text||"";
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+    del.onclick=async()=>{await removeRecord("notes",item.id);renderNotes();};
+    el.append(h,p,del);
+    list.append(el);
+  });
+}
+
+async function startRecording() {
+  if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    return alert("Voice recording is not supported by this browser.");
+  }
+  try {
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    recorder=new MediaRecorder(stream);
+    recordingChunks=[];
+    recorder.ondataavailable=e=>recordingChunks.push(e.data);
+    recorder.onstop=async()=>{
+      const blob=new Blob(recordingChunks,{type:recorder.mimeType||"audio/webm"});
+      await addRecord("notes",{
+        title:"Voice note",
+        text:"Voice recording",
+        audio:blob,
+        created:new Date().toISOString()
+      });
+      stream.getTracks().forEach(t=>t.stop());
+      document.getElementById("recordStatus").textContent="Voice note saved.";
+      renderNotes();
+    };
+    recorder.start();
+    document.getElementById("recordStatus").textContent="Recording...";
+  } catch(e) {
+    alert("Microphone permission was not granted.");
+  }
+}
+
+function stopRecording() {
+  if(recorder&&recorder.state==="recording") recorder.stop();
+}
+
+async function addPhotos() {
+  const input=document.getElementById("photoInput");
+  for(const file of input.files) {
+    if(!file.type.startsWith("image/")) continue;
+    await addRecord("photos",{name:file.name,type:file.type,blob:file,created:new Date().toISOString()});
+  }
+  input.value="";
+  renderPhotos();
+}
+
+async function renderPhotos() {
+  const list=document.getElementById("photosList");
+  list.innerHTML="";
+  const records=(await getAll("photos")).reverse();
+  records.forEach(item=>{
+    const el=document.createElement("div");el.className="item";
+    const img=document.createElement("img");
+    const url=URL.createObjectURL(item.blob);
+    img.src=url;
+    const name=document.createElement("p");name.textContent=item.name;
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+    del.onclick=async()=>{URL.revokeObjectURL(url);await removeRecord("photos",item.id);renderPhotos();};
+    el.append(img,name,del);list.append(el);
+  });
+}
+
+async function addFiles() {
+  const input=document.getElementById("fileInput");
+  for(const file of input.files) {
+    await addRecord("files",{name:file.name,type:file.type,blob:file,created:new Date().toISOString()});
+  }
+  input.value="";
+  renderFiles();
+}
+
+async function renderFiles() {
+  const list=document.getElementById("filesList");
+  list.innerHTML="";
+  const records=(await getAll("files")).reverse();
+  records.forEach(item=>{
+    const el=document.createElement("div");el.className="item";
+    const name=document.createElement("p");name.textContent=item.name;
+    const open=document.createElement("button");open.textContent="Open";
+    open.onclick=()=>{
+      const url=URL.createObjectURL(item.blob);
+      const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener";
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+    };
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+    del.onclick=async()=>{await removeRecord("files",item.id);renderFiles();};
+    el.append(name,open,del);list.append(el);
+  });
+}
+
+async function saveReminder() {
+  const title=document.getElementById("reminderTitle").value.trim();
+  const date=document.getElementById("reminderDate").value;
+  const details=document.getElementById("reminderDetails").value.trim();
+  if(!title||!date) return alert("Enter a title and date.");
+  await addRecord("reminders",{title,date,details,done:false});
+  document.getElementById("reminderTitle").value="";
+  document.getElementById("reminderDate").value="";
+  document.getElementById("reminderDetails").value="";
+  renderReminders();
+}
+
+async function renderReminders() {
+  const list=document.getElementById("remindersList");
+  list.innerHTML="";
+  const records=(await getAll("reminders")).sort((a,b)=>a.date.localeCompare(b.date));
+  records.forEach(item=>{
+    const el=document.createElement("div");el.className="item";
+    const h=document.createElement("h3");h.textContent=item.title;
+    const p=document.createElement("p");p.textContent=item.details||"";
+    const date=document.createElement("small");date.textContent=new Date(item.date).toLocaleString();
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+    del.onclick=async()=>{await removeRecord("reminders",item.id);renderReminders();};
+    el.append(h,p,date,document.createElement("br"),del);list.append(el);
+  });
+}
+
+async function enableNotifications() {
+  if(!("Notification" in window)) return alert("Notifications are not supported.");
+  const permission=await Notification.requestPermission();
+  alert(permission==="granted"?"Notifications enabled while MySpace is open.":"Notification permission was not granted.");
+}
+
+async function checkReminders() {
+  if(!("Notification" in window)||Notification.permission!=="granted") return;
+  const records=await getAll("reminders");
+  const now=Date.now();
+  for(const item of records) {
+    if(item.notified) continue;
+    const time=new Date(item.date).getTime();
+    if(time<=now && time>now-60000) {
+      new Notification("MySpace Reminder",{body:item.title});
+      const tx=db.transaction("reminders","readwrite");
+      tx.objectStore("reminders").put({...item,notified:true});
+    }
+  }
+}
+
+/* Vault encryption */
+const encoder=new TextEncoder();
+const decoder=new TextDecoder();
+
+function randomBytes(length) {
+  return crypto.getRandomValues(new Uint8Array(length));
+}
+
+async function deriveKey(password,salt) {
+  const material=await crypto.subtle.importKey(
+    "raw",encoder.encode(password),"PBKDF2",false,["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {name:"PBKDF2",salt,iterations:600000,hash:"SHA-256"},
+    material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]
+  );
+}
+
+async function encryptText(text,key) {
+  const iv=randomBytes(12);
+  const encrypted=await crypto.subtle.encrypt(
+    {name:"AES-GCM",iv},key,encoder.encode(text)
+  );
+  return {iv:Array.from(iv),data:Array.from(new Uint8Array(encrypted))};
+}
+
+async function decryptText(record,key) {
+  const decrypted=await crypto.subtle.decrypt(
+    {name:"AES-GCM",iv:new Uint8Array(record.iv)},
+    key,new Uint8Array(record.data)
+  );
+  return decoder.decode(decrypted);
+}
+
+async function prepareVault() {
+  const salt=await getSetting("vaultSalt");
+  document.getElementById("vaultSetup").classList.toggle("hidden",!!salt);
+  document.getElementById("vaultLogin").classList.toggle("hidden",!salt);
+  document.getElementById("vaultContent").classList.add("hidden");
+}
+
+async function createVault() {
+  const master=document.getElementById("masterNew").value;
+  const pin=document.getElementById("pinNew").value;
+  const confirm=document.getElementById("pinConfirm").value;
+  if(master.length<10) return alert("Use a master password of at least 10 characters.");
+  if(!/^\d{6}$/.test(pin)) return alert("PIN must contain exactly six digits.");
+  if(pin!==confirm) return alert("PINs do not match.");
+  const salt=randomBytes(16);
+  await setting("vaultSalt",Array.from(salt));
+  vaultKey=await deriveKey(master+":"+pin,salt);
+  vaultPin=pin;
+  await setting("vaultVerifier",await encryptText("MySpace Vault",vaultKey));
+  document.getElementById("vaultSetup").classList.add("hidden");
+  document.getElementById("vaultContent").classList.remove("hidden");
+  renderSecrets();
+}
+
+async function unlockVault() {
+  const master=document.getElementById("masterLogin").value;
+  const pin=document.getElementById("pinLogin").value;
+  if(!/^\d{6}$/.test(pin)) return alert("Enter your six-digit PIN.");
+  const salt=await getSetting("vaultSalt");
+  const verifier=await getSetting("vaultVerifier");
+  try {
+    const key=await deriveKey(master+":"+pin,new Uint8Array(salt));
+    const result=await decryptText(verifier,key);
+    if(result!=="MySpace Vault") throw new Error("Invalid password");
+    vaultKey=key;
+    vaultPin=pin;
+    document.getElementById("vaultLogin").classList.add("hidden");
+    document.getElementById("vaultContent").classList.remove("hidden");
+    document.getElementById("vaultError").textContent="";
+    renderSecrets();
+  } catch(e) {
+    document.getElementById("vaultError").textContent="Incorrect master password or PIN.";
+  }
+}
+
+async function saveSecret() {
+  if(!vaultKey) return alert("Unlock the vault first.");
+  const title=document.getElementById("secretTitle").value.trim();
+  const value=document.getElementById("secretValue").value;
+  const category=document.getElementById("secretCategory").value;
+  if(!title||!value) return alert("Enter a title and private information.");
+  const encrypted=await encryptText(JSON.stringify({title,value,category}),vaultKey);
+  await addRecord("secrets",encrypted);
+  document.getElementById("secretTitle").value="";
+  document.getElementById("secretValue").value="";
+  renderSecrets();
+}
+
+async function renderSecrets() {
+  if(!vaultKey) return;
+  const list=document.getElementById("secretsList");
+  list.innerHTML="";
+  const records=await getAll("secrets");
+  for(const item of records) {
+    const el=document.createElement("div");el.className="item";
+    try {
+      const secret=JSON.parse(await decryptText(item,vaultKey));
+      const h=document.createElement("h3");h.textContent=secret.title;
+      const category=document.createElement("small");category.textContent=secret.category;
+      const p=document.createElement("p");p.textContent="••••••••••••";
+      const reveal=document.createElement("button");reveal.className="secondary";reveal.textContent="Reveal";
+      let visible=false;
+      reveal.onclick=()=>{
+        visible=!visible;
+        p.textContent=visible?secret.value:"••••••••••••";
+        reveal.textContent=visible?"Hide":"Reveal";
+      };
+      const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+      del.onclick=async()=>{
+        if(confirm("Permanently delete this secret?")) {
+          await removeRecord("secrets",item.id);renderSecrets();
+        }
+      };
+      el.append(h,category,p,reveal,del);list.append(el);
+    } catch(e) {
+      const p=document.createElement("p");p.textContent="Unable to decrypt this entry.";
+      el.append(p);list.append(el);
+    }
+  }
+}
+
+function lockVault() {
+  vaultKey=null;
+  vaultPin=null;
+  document.getElementById("vaultContent").classList.add("hidden");
+  prepareVault();
+}
+
+async function setAppPassword() {
+  const current=await getSetting("appPassword");
+  if(current && prompt("Enter current app password")!==current) return alert("Incorrect password.");
+  const next=prompt("Create a new app password (at least 8 characters)");
+  if(!next||next.length<8) return alert("Password must be at least eight characters.");
+  await setting("appPassword",next);
+  alert("App password updated.");
+}
+
+async function lockApp() {
+  appPassword=await getSetting("appPassword");
+  if(!appPassword) {
+    alert("Set an app password in Settings first.");
+    return;
+  }
+  lockVault();
+  document.getElementById("lockScreen").style.display="flex";
+}
+
+async function unlockApp() {
+  const saved=await getSetting("appPassword");
+  if(document.getElementById("appUnlock").value===saved) {
+    document.getElementById("lockScreen").style.display="none";
+    document.getElementById("appUnlock").value="";
+    document.getElementById("lockError").textContent="";
+  } else {
+    document.getElementById("lockError").textContent="Incorrect password.";
+  }
+}
+
+async function clearAllData() {
+  if(!confirm("Delete ALL MySpace data on this device? This cannot be undone.")) return;
+  if(!confirm("Are you absolutely sure?")) return;
+  db.close();
+  await new Promise((resolve,reject)=>{
+    const request=indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess=resolve;
+    request.onerror=()=>reject(request.error);
+  });
+  alert("MySpace data deleted.");
+  location.reload();
+}
+
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden) lockVault();
+});
+
+(async()=>{
+  try {
+    db=await openDB();
+    checkReminders();
+    setInterval(checkReminders,30000);
+    const saved=await getSetting("appPassword");
+    if(saved) {
+      appPassword=saved;
+      document.getElementById("lockScreen").style.display="flex";
+    }
+  } catch(e) {
+    alert("MySpace could not open its local database. Please reload.");
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
