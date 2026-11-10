@@ -574,6 +574,31 @@ function randomBytes(length) {
   return crypto.getRandomValues(new Uint8Array(length));
 }
 
+async function hashAppPassword(password, salt) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: new Uint8Array(salt),
+      iterations: 600000,
+      hash: "SHA-256"
+    },
+    material,
+    256
+  );
+
+  return Array.from(new Uint8Array(bits))
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+  
 async function deriveKey(password, salt) {
   const material = await crypto.subtle.importKey(
     "raw",
@@ -942,32 +967,90 @@ function lockVault() {
 }
 
 async function setAppPassword() {
-  const current=await getSetting("appPassword");
-  if(current && prompt("Enter current app password")!==current) return alert("Incorrect password.");
-  const next=prompt("Create a new app password (at least 8 characters)");
-  if(!next||next.length<8) return alert("Password must be at least eight characters.");
-  await setting("appPassword",next);
-  alert("App password updated.");
+  const currentHash = await getSetting("appPasswordHash");
+  const currentSalt = await getSetting("appPasswordSalt");
+  const legacyPassword = await getSetting("appPassword");
+
+  if (currentHash && currentSalt) {
+    const current = prompt("Enter your current app password");
+    if (!current) return;
+
+    const check = await hashAppPassword(current, currentSalt);
+
+    if (check !== currentHash) {
+      alert("Incorrect password.");
+      return;
+    }
+  } else if (legacyPassword) {
+    const current = prompt("Enter your current app password");
+    if (current !== legacyPassword) {
+      alert("Incorrect password.");
+      return;
+    }
+  }
+
+  const next = prompt("Create a new app password (at least 10 characters)");
+
+  if (!next || next.length < 10) {
+    alert("Password must be at least 10 characters.");
+    return;
+  }
+
+  const salt = Array.from(
+    crypto.getRandomValues(new Uint8Array(16))
+  );
+
+  const hash = await hashAppPassword(next, salt);
+
+  await setting("appPasswordSalt", salt);
+  await setting("appPasswordHash", hash);
+  await setting("appPassword", undefined);
+
+  alert("App password updated securely.");
 }
 
 async function lockApp() {
-  appPassword=await getSetting("appPassword");
-  if(!appPassword) {
+  const savedHash = await getSetting("appPasswordHash");
+  const salt = await getSetting("appPasswordSalt");
+
+  if (!savedHash || !salt) {
     alert("Set an app password in Settings first.");
     return;
   }
+
   lockVault();
-  document.getElementById("lockScreen").style.display="flex";
+  document.getElementById("lockScreen").style.display = "flex";
 }
 
 async function unlockApp() {
-  const saved=await getSetting("appPassword");
-  if(document.getElementById("appUnlock").value===saved) {
-    document.getElementById("lockScreen").style.display="none";
-    document.getElementById("appUnlock").value="";
-    document.getElementById("lockError").textContent="";
-  } else {
-    document.getElementById("lockError").textContent="Incorrect password.";
+  const password = document.getElementById("appUnlock").value;
+  const error = document.getElementById("lockError");
+
+  if (!password) {
+    error.textContent = "Enter your app password.";
+    return;
+  }
+
+  try {
+    const salt = await getSetting("appPasswordSalt");
+    const savedHash = await getSetting("appPasswordHash");
+
+    if (!salt || !savedHash) {
+      error.textContent = "App password not configured. Please reset it in Settings.";
+      return;
+    }
+
+    const enteredHash = await hashAppPassword(password, salt);
+
+    if (enteredHash === savedHash) {
+      document.getElementById("lockScreen").style.display = "none";
+      document.getElementById("appUnlock").value = "";
+      error.textContent = "";
+    } else {
+      error.textContent = "Incorrect password.";
+    }
+  } catch (e) {
+    error.textContent = "Unable to verify password. Please try again.";
   }
 }
 
@@ -993,11 +1076,11 @@ document.addEventListener("visibilitychange",()=>{
     db=await openDB();
     checkReminders();
     setInterval(checkReminders,30000);
-    const saved=await getSetting("appPassword");
-    if(saved) {
-      appPassword=saved;
-      document.getElementById("lockScreen").style.display="flex";
-    }
+ const savedHash = await getSetting("appPasswordHash");
+
+if (savedHash) {
+  document.getElementById("lockScreen").style.display = "flex";
+}
   } catch(e) {
     alert("MySpace could not open its local database. Please reload.");
     console.error(e);
