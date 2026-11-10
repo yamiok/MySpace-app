@@ -351,18 +351,27 @@ function removeRecord(name,id) {
 
 function setting(key,value) {
   return new Promise((resolve,reject) => {
-    const request = store("settings","readwrite").put({key,value});
-    request.onsuccess = resolve;
+    const objectStore = store("settings","readwrite");
+    const request = objectStore.getAll();
+
+    request.onsuccess = () => {
+      const existing = request.result.find(item => item.key === key);
+      const saveRequest = existing
+        ? objectStore.put({...existing,value})
+        : objectStore.add({key,value});
+
+      saveRequest.onsuccess = resolve;
+      saveRequest.onerror = () => reject(saveRequest.error);
+    };
+
     request.onerror = () => reject(request.error);
   });
 }
 
-function getSetting(key) {
-  return new Promise((resolve,reject) => {
-    const request = store("settings").get(key);
-    request.onsuccess = () => resolve(request.result?.value);
-    request.onerror = () => reject(request.error);
-  });
+async function getSetting(key) {
+  const records = await getAll("settings");
+  const item = records.find(record => record.key === key);
+  return item ? item.value : undefined;
 }
 
 function showPanel(id,button) {
