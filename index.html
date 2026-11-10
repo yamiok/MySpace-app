@@ -546,135 +546,392 @@ async function checkReminders() {
   }
 }
 
-/* Vault encryption */
-const encoder=new TextEncoder();
-const decoder=new TextDecoder();
+
+
+/* Private Vault — MySpace */
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+let vaultKey = null;
+let vaultPin = null;
+
+const VAULT_CATEGORIES = [
+  "Passwords",
+  "Recovery",
+  "Personal",
+  "Property",
+  "Other"
+];
 
 function randomBytes(length) {
   return crypto.getRandomValues(new Uint8Array(length));
 }
 
-async function deriveKey(password,salt) {
-  const material=await crypto.subtle.importKey(
-    "raw",encoder.encode(password),"PBKDF2",false,["deriveKey"]
+async function deriveKey(password, salt) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
   );
+
   return crypto.subtle.deriveKey(
-    {name:"PBKDF2",salt,iterations:600000,hash:"SHA-256"},
-    material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: 600000,
+      hash: "SHA-256"
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
   );
 }
 
-async function encryptText(text,key) {
-  const iv=randomBytes(12);
-  const encrypted=await crypto.subtle.encrypt(
-    {name:"AES-GCM",iv},key,encoder.encode(text)
+async function encryptText(text, key) {
+  const iv = randomBytes(12);
+
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    encoder.encode(text)
   );
-  return {iv:Array.from(iv),data:Array.from(new Uint8Array(encrypted))};
+
+  return {
+    iv: Array.from(iv),
+    data: Array.from(new Uint8Array(encrypted))
+  };
 }
 
-async function decryptText(record,key) {
-  const decrypted=await crypto.subtle.decrypt(
-    {name:"AES-GCM",iv:new Uint8Array(record.iv)},
-    key,new Uint8Array(record.data)
+async function decryptText(record, key) {
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: new Uint8Array(record.iv)
+    },
+    key,
+    new Uint8Array(record.data)
   );
+
   return decoder.decode(decrypted);
 }
 
+function updateSecretRecord(record) {
+  return new Promise((resolve, reject) => {
+    const request = store("secrets", "readwrite").put(record);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 async function prepareVault() {
-  const salt=await getSetting("vaultSalt");
-  document.getElementById("vaultSetup").classList.toggle("hidden",!!salt);
-  document.getElementById("vaultLogin").classList.toggle("hidden",!salt);
-  document.getElementById("vaultContent").classList.add("hidden");
+  const salt = await getSetting("vaultSalt");
+
+  document.getElementById("vaultSetup")
+    .classList.toggle("hidden", !!salt);
+
+  document.getElementById("vaultLogin")
+    .classList.toggle("hidden", !salt || !!vaultKey);
+
+  document.getElementById("vaultContent")
+    .classList.toggle("hidden", !vaultKey);
+
+  if (vaultKey) renderSecrets();
 }
 
 async function createVault() {
-  const master=document.getElementById("masterNew").value;
-  const pin=document.getElementById("pinNew").value;
-  const confirm=document.getElementById("pinConfirm").value;
-  if(master.length<10) return alert("Use a master password of at least 10 characters.");
-  if(!/^\d{6}$/.test(pin)) return alert("PIN must contain exactly six digits.");
-  if(pin!==confirm) return alert("PINs do not match.");
-  const salt=randomBytes(16);
-  await setting("vaultSalt",Array.from(salt));
-  vaultKey=await deriveKey(master+":"+pin,salt);
-  vaultPin=pin;
-  await setting("vaultVerifier",await encryptText("MySpace Vault",vaultKey));
-  document.getElementById("vaultSetup").classList.add("hidden");
-  document.getElementById("vaultContent").classList.remove("hidden");
-  renderSecrets();
+  const master = document.getElementById("masterNew").value;
+  const pin = document.getElementById("pinNew").value;
+  const confirmPin = document.getElementById("pinConfirm").value;
+
+  if (master.length < 10) {
+    return alert("Master password must have at least 10 characters.");
+  }
+
+  if (!/^\d{6}$/.test(pin)) {
+    return alert("PIN must contain exactly six digits.");
+  }
+
+  if (pin !== confirmPin) {
+    return alert("PINs do not match.");
+  }
+
+  if (await getSetting("vaultSalt")) {
+    return alert("A vault already exists. Please unlock it.");
+  }
+
+  try {
+    const salt = randomBytes(16);
+
+    vaultKey = await deriveKey(master + ":" + pin, salt);
+    vaultPin = pin;
+
+    const verifier = await encryptText("MySpace Vault", vaultKey);
+
+    await setting("vaultSalt", Array.from(salt));
+    await setting("vaultVerifier", verifier);
+
+    document.getElementById("masterNew").value = "";
+    document.getElementById("pinNew").value = "";
+    document.getElementById("pinConfirm").value = "";
+
+    document.getElementById("vaultSetup").classList.add("hidden");
+    document.getElementById("vaultLogin").classList.add("hidden");
+    document.getElementById("vaultContent").classList.remove("hidden");
+
+    renderSecrets();
+    alert("Private Vault created successfully.");
+  } catch (error) {
+    vaultKey = null;
+    vaultPin = null;
+    alert("Could not create the vault. Please try again.");
+  }
 }
 
 async function unlockVault() {
-  const master=document.getElementById("masterLogin").value;
-  const pin=document.getElementById("pinLogin").value;
-  if(!/^\d{6}$/.test(pin)) return alert("Enter your six-digit PIN.");
-  const salt=await getSetting("vaultSalt");
-  const verifier=await getSetting("vaultVerifier");
+  const master = document.getElementById("masterLogin").value;
+  const pin = document.getElementById("pinLogin").value;
+
+  if (!/^\d{6}$/.test(pin)) {
+    return alert("Enter exactly six PIN digits.");
+  }
+
   try {
-    const key=await deriveKey(master+":"+pin,new Uint8Array(salt));
-    const result=await decryptText(verifier,key);
-    if(result!=="MySpace Vault") throw new Error("Invalid password");
-    vaultKey=key;
-    vaultPin=pin;
+    const salt = await getSetting("vaultSalt");
+    const verifier = await getSetting("vaultVerifier");
+
+    if (!salt || !verifier) {
+      return alert("Vault setup information is missing.");
+    }
+
+    const key = await deriveKey(
+      master + ":" + pin,
+      new Uint8Array(salt)
+    );
+
+    const result = await decryptText(verifier, key);
+
+    if (result !== "MySpace Vault") {
+      throw new Error("Incorrect credentials");
+    }
+
+    vaultKey = key;
+    vaultPin = pin;
+
+    document.getElementById("masterLogin").value = "";
+    document.getElementById("pinLogin").value = "";
+    document.getElementById("vaultError").textContent = "";
+
     document.getElementById("vaultLogin").classList.add("hidden");
     document.getElementById("vaultContent").classList.remove("hidden");
-    document.getElementById("vaultError").textContent="";
+
     renderSecrets();
-  } catch(e) {
-    document.getElementById("vaultError").textContent="Incorrect master password or PIN.";
+
+  } catch (error) {
+    vaultKey = null;
+    vaultPin = null;
+    document.getElementById("vaultError").textContent =
+      "Incorrect master password or PIN.";
   }
 }
 
 async function saveSecret() {
-  if(!vaultKey) return alert("Unlock the vault first.");
-  const title=document.getElementById("secretTitle").value.trim();
-  const value=document.getElementById("secretValue").value;
-  const category=document.getElementById("secretCategory").value;
-  if(!title||!value) return alert("Enter a title and private information.");
-  const encrypted=await encryptText(JSON.stringify({title,value,category}),vaultKey);
-  await addRecord("secrets",encrypted);
-  document.getElementById("secretTitle").value="";
-  document.getElementById("secretValue").value="";
-  renderSecrets();
+  if (!vaultKey) {
+    return alert("Unlock your vault first.");
+  }
+
+  const title = document.getElementById("secretTitle").value.trim();
+  const value = document.getElementById("secretValue").value;
+  const category = document.getElementById("secretCategory").value;
+
+  if (!title || !value) {
+    return alert("Enter a name and private information.");
+  }
+
+  if (!VAULT_CATEGORIES.includes(category)) {
+    return alert("Please select a valid category.");
+  }
+
+  try {
+    const encrypted = await encryptText(
+      JSON.stringify({ title, value, category }),
+      vaultKey
+    );
+
+    await addRecord("secrets", encrypted);
+
+    document.getElementById("secretTitle").value = "";
+    document.getElementById("secretValue").value = "";
+
+    renderSecrets();
+    alert("Private information saved.");
+  } catch (error) {
+    alert("Could not save this information.");
+  }
 }
 
 async function renderSecrets() {
-  if(!vaultKey) return;
-  const list=document.getElementById("secretsList");
-  list.innerHTML="";
-  const records=await getAll("secrets");
-  for(const item of records) {
-    const el=document.createElement("div");el.className="item";
+  if (!vaultKey) return;
+
+  const list = document.getElementById("secretsList");
+  list.innerHTML = "";
+
+  const records = (await getAll("secrets")).reverse();
+
+  for (const item of records) {
+    const el = document.createElement("div");
+    el.className = "item";
+
     try {
-      const secret=JSON.parse(await decryptText(item,vaultKey));
-      const h=document.createElement("h3");h.textContent=secret.title;
-      const category=document.createElement("small");category.textContent=secret.category;
-      const p=document.createElement("p");p.textContent="••••••••••••";
-      const reveal=document.createElement("button");reveal.className="secondary";reveal.textContent="Reveal";
-      let visible=false;
-      reveal.onclick=()=>{
-        visible=!visible;
-        p.textContent=visible?secret.value:"••••••••••••";
-        reveal.textContent=visible?"Hide":"Reveal";
-      };
-      const del=document.createElement("button");del.className="danger";del.textContent="Delete";
-      del.onclick=async()=>{
-        if(confirm("Permanently delete this secret?")) {
-          await removeRecord("secrets",item.id);renderSecrets();
+      const secret = JSON.parse(
+        await decryptText(item, vaultKey)
+      );
+
+      const heading = document.createElement("h3");
+      heading.textContent = secret.title;
+
+      const category = document.createElement("small");
+      category.textContent = secret.category;
+
+      const value = document.createElement("p");
+      value.textContent = "••••••••••••";
+
+      const reveal = document.createElement("button");
+      reveal.className = "secondary";
+      reveal.textContent = "Reveal";
+
+      let visible = false;
+
+      reveal.onclick = () => {
+        if (!vaultKey) return;
+
+        if (!visible) {
+          const enteredPin = prompt(
+            "Enter your exactly six-digit PIN to reveal this information."
+          );
+
+          if (enteredPin === null) return;
+
+          if (!/^\d{6}$/.test(enteredPin)) {
+            return alert("PIN must contain exactly six digits.");
+          }
+
+          if (enteredPin !== vaultPin) {
+            return alert("Incorrect PIN. Information remains hidden.");
+          }
+
+          visible = true;
+          value.textContent = secret.value;
+          reveal.textContent = "Hide";
+
+        } else {
+          visible = false;
+          value.textContent = "••••••••••••";
+          reveal.textContent = "Reveal";
         }
       };
-      el.append(h,category,p,reveal,del);list.append(el);
-    } catch(e) {
-      const p=document.createElement("p");p.textContent="Unable to decrypt this entry.";
-      el.append(p);list.append(el);
+
+      const edit = document.createElement("button");
+      edit.className = "secondary";
+      edit.textContent = "Edit";
+
+      edit.onclick = async () => {
+        if (!vaultKey) return;
+
+        const newTitle = prompt(
+          "Edit name:",
+          secret.title
+        );
+
+        if (newTitle === null) return;
+
+        const newValue = prompt(
+          "Edit private information:",
+          secret.value
+        );
+
+        if (newValue === null) return;
+
+        const newCategory = prompt(
+          "Category: Passwords, Recovery, Personal, Property, Other",
+          secret.category
+        );
+
+        if (newCategory === null) return;
+
+        if (!VAULT_CATEGORIES.includes(newCategory)) {
+          return alert("Invalid category.");
+        }
+
+        if (!newTitle.trim() || !newValue) {
+          return alert("Name and information cannot be empty.");
+        }
+
+        try {
+          const encrypted = await encryptText(
+            JSON.stringify({
+              title: newTitle.trim(),
+              value: newValue,
+              category: newCategory
+            }),
+            vaultKey
+          );
+
+          await updateSecretRecord({
+            ...encrypted,
+            id: item.id
+          });
+
+          renderSecrets();
+          alert("Information updated.");
+
+        } catch (error) {
+          alert("Could not update this information.");
+        }
+      };
+
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+
+      del.onclick = async () => {
+        if (confirm("Permanently delete this secret?")) {
+          await removeRecord("secrets", item.id);
+          renderSecrets();
+        }
+      };
+
+      el.append(
+        heading,
+        category,
+        value,
+        reveal,
+        edit,
+        del
+      );
+
+    } catch (error) {
+      const message = document.createElement("p");
+      message.textContent = "Unable to decrypt this entry.";
+      el.append(message);
     }
+
+    list.append(el);
   }
 }
 
 function lockVault() {
-  vaultKey=null;
-  vaultPin=null;
+  vaultKey = null;
+  vaultPin = null;
+
   document.getElementById("vaultContent").classList.add("hidden");
+
+  document.getElementById("secretTitle").value = "";
+  document.getElementById("secretValue").value = "";
+
   prepareVault();
 }
 
