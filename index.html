@@ -294,71 +294,95 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
 <footer>MySpace · Your Private Space</footer>
 
 <script>
+
 "use strict";
 
 const DB_NAME = "MySpaceDatabase";
 const DB_VERSION = 1;
+
 let db;
 let recorder = null;
 let recordingChunks = [];
 let vaultKey = null;
 let vaultPin = null;
 let appPassword = null;
+let notesEncryptionKey = null;
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+const VAULT_CATEGORIES = [
+  "Passwords", "Recovery", "Personal", "Property", "Other"
+];
+
+function randomBytes(length) {
+  return crypto.getRandomValues(new Uint8Array(length));
+}
+
+/* DATABASE */
 
 function openDB() {
-  return new Promise((resolve,reject) => {
-    const request = indexedDB.open(DB_NAME,DB_VERSION);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
     request.onupgradeneeded = () => {
       const database = request.result;
-      ["notes","photos","files","reminders","secrets","settings"].forEach(name => {
-        if (!database.objectStoreNames.contains(name)) {
-          database.createObjectStore(name,{keyPath:"id",autoIncrement:true});
-        }
-      });
+
+      ["notes", "photos", "files", "reminders", "secrets", "settings"]
+        .forEach(name => {
+          if (!database.objectStoreNames.contains(name)) {
+            database.createObjectStore(name, {
+              keyPath: "id",
+              autoIncrement: true
+            });
+          }
+        });
     };
+
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-function store(name,mode="readonly") {
-  return db.transaction(name,mode).objectStore(name);
+function store(name, mode = "readonly") {
+  return db.transaction(name, mode).objectStore(name);
 }
 
-function addRecord(name,value) {
-  return new Promise((resolve,reject) => {
-    const request = store(name,"readwrite").add(value);
+function addRecord(name, value) {
+  return new Promise((resolve, reject) => {
+    const request = store(name, "readwrite").add(value);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
 function getAll(name) {
-  return new Promise((resolve,reject) => {
+  return new Promise((resolve, reject) => {
     const request = store(name).getAll();
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-function removeRecord(name,id) {
-  return new Promise((resolve,reject) => {
-    const request = store(name,"readwrite").delete(Number(id));
+function removeRecord(name, id) {
+  return new Promise((resolve, reject) => {
+    const request = store(name, "readwrite").delete(Number(id));
     request.onsuccess = resolve;
     request.onerror = () => reject(request.error);
   });
 }
 
-function setting(key,value) {
-  return new Promise((resolve,reject) => {
-    const objectStore = store("settings","readwrite");
+function setting(key, value) {
+  return new Promise((resolve, reject) => {
+    const objectStore = store("settings", "readwrite");
     const request = objectStore.getAll();
 
     request.onsuccess = () => {
       const existing = request.result.find(item => item.key === key);
+
       const saveRequest = existing
-        ? objectStore.put({...existing,value})
-        : objectStore.add({key,value});
+        ? objectStore.put({ ...existing, value })
+        : objectStore.add({ key, value });
 
       saveRequest.onsuccess = resolve;
       saveRequest.onerror = () => reject(saveRequest.error);
@@ -374,231 +398,29 @@ async function getSetting(key) {
   return item ? item.value : undefined;
 }
 
-function showPanel(id,button) {
-  document.getElementById("home").style.display="none";
-  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
-  document.getElementById(id).classList.add("active");
-  document.querySelectorAll(".bottom button").forEach(b=>b.classList.remove("selected"));
-  if(button) button.classList.add("selected");
-  if(id==="notes") renderNotes();
-  if(id==="photos") renderPhotos();
-  if(id==="files") renderFiles();
-  if(id==="reminders") renderReminders();
-  if(id==="vault") prepareVault();
-}
-
-function goHome(button) {
-  document.getElementById("home").style.display="block";
-  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
-  document.querySelectorAll(".bottom button").forEach(b=>b.classList.remove("selected"));
-  button.classList.add("selected");
-}
-
-async function saveNote() {
-  const title=document.getElementById("noteTitle").value.trim();
-  const text=document.getElementById("noteText").value.trim();
-  if(!title&&!text) return alert("Enter a note first.");
-  await addRecord("notes",{title,text,created:new Date().toISOString()});
-  document.getElementById("noteTitle").value="";
-  document.getElementById("noteText").value="";
-  renderNotes();
-}
-
-async function renderNotes() {
-  const list=document.getElementById("notesList");
-  const records=await getAll("notes");
-  list.innerHTML="";
-  records.reverse().forEach(item=>{
-    const el=document.createElement("div");
-    el.className="item";
-    const h=document.createElement("h3");h.textContent=item.title||"Untitled";
-    const p=document.createElement("p");p.textContent=item.text||"";
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
-    del.onclick=async()=>{await removeRecord("notes",item.id);renderNotes();};
-    el.append(h,p,del);
-    list.append(el);
-  });
-}
-
-async function startRecording() {
-  if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    return alert("Voice recording is not supported by this browser.");
-  }
-  try {
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    recorder=new MediaRecorder(stream);
-    recordingChunks=[];
-    recorder.ondataavailable=e=>recordingChunks.push(e.data);
-    recorder.onstop=async()=>{
-      const blob=new Blob(recordingChunks,{type:recorder.mimeType||"audio/webm"});
-      await addRecord("notes",{
-        title:"Voice note",
-        text:"Voice recording",
-        audio:blob,
-        created:new Date().toISOString()
-      });
-      stream.getTracks().forEach(t=>t.stop());
-      document.getElementById("recordStatus").textContent="Voice note saved.";
-      renderNotes();
-    };
-    recorder.start();
-    document.getElementById("recordStatus").textContent="Recording...";
-  } catch(e) {
-    alert("Microphone permission was not granted.");
-  }
-}
-
-function stopRecording() {
-  if(recorder&&recorder.state==="recording") recorder.stop();
-}
-
-async function addPhotos() {
-  const input=document.getElementById("photoInput");
-  for(const file of input.files) {
-    if(!file.type.startsWith("image/")) continue;
-    await addRecord("photos",{name:file.name,type:file.type,blob:file,created:new Date().toISOString()});
-  }
-  input.value="";
-  renderPhotos();
-}
-
-async function renderPhotos() {
-  const list=document.getElementById("photosList");
-  list.innerHTML="";
-  const records=(await getAll("photos")).reverse();
-  records.forEach(item=>{
-    const el=document.createElement("div");el.className="item";
-    const img=document.createElement("img");
-    const url=URL.createObjectURL(item.blob);
-    img.src=url;
-    const name=document.createElement("p");name.textContent=item.name;
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
-    del.onclick=async()=>{URL.revokeObjectURL(url);await removeRecord("photos",item.id);renderPhotos();};
-    el.append(img,name,del);list.append(el);
-  });
-}
-
-async function addFiles() {
-  const input=document.getElementById("fileInput");
-  for(const file of input.files) {
-    await addRecord("files",{name:file.name,type:file.type,blob:file,created:new Date().toISOString()});
-  }
-  input.value="";
-  renderFiles();
-}
-
-async function renderFiles() {
-  const list=document.getElementById("filesList");
-  list.innerHTML="";
-  const records=(await getAll("files")).reverse();
-  records.forEach(item=>{
-    const el=document.createElement("div");el.className="item";
-    const name=document.createElement("p");name.textContent=item.name;
-    const open=document.createElement("button");open.textContent="Open";
-    open.onclick=()=>{
-      const url=URL.createObjectURL(item.blob);
-      const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener";
-      a.click();
-      setTimeout(()=>URL.revokeObjectURL(url),60000);
-    };
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
-    del.onclick=async()=>{await removeRecord("files",item.id);renderFiles();};
-    el.append(name,open,del);list.append(el);
-  });
-}
-
-async function saveReminder() {
-  const title=document.getElementById("reminderTitle").value.trim();
-  const date=document.getElementById("reminderDate").value;
-  const details=document.getElementById("reminderDetails").value.trim();
-  if(!title||!date) return alert("Enter a title and date.");
-  await addRecord("reminders",{title,date,details,done:false});
-  document.getElementById("reminderTitle").value="";
-  document.getElementById("reminderDate").value="";
-  document.getElementById("reminderDetails").value="";
-  renderReminders();
-}
-
-async function renderReminders() {
-  const list=document.getElementById("remindersList");
-  list.innerHTML="";
-  const records=(await getAll("reminders")).sort((a,b)=>a.date.localeCompare(b.date));
-  records.forEach(item=>{
-    const el=document.createElement("div");el.className="item";
-    const h=document.createElement("h3");h.textContent=item.title;
-    const p=document.createElement("p");p.textContent=item.details||"";
-    const date=document.createElement("small");date.textContent=new Date(item.date).toLocaleString();
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
-    del.onclick=async()=>{await removeRecord("reminders",item.id);renderReminders();};
-    el.append(h,p,date,document.createElement("br"),del);list.append(el);
-  });
-}
-
-async function enableNotifications() {
-  if(!("Notification" in window)) return alert("Notifications are not supported.");
-  const permission=await Notification.requestPermission();
-  alert(permission==="granted"?"Notifications enabled while MySpace is open.":"Notification permission was not granted.");
-}
-
-async function checkReminders() {
-  if(!("Notification" in window)||Notification.permission!=="granted") return;
-  const records=await getAll("reminders");
-  const now=Date.now();
-  for(const item of records) {
-    if(item.notified) continue;
-    const time=new Date(item.date).getTime();
-    if(time<=now && time>now-60000) {
-      new Notification("MySpace Reminder",{body:item.title});
-      const tx=db.transaction("reminders","readwrite");
-      tx.objectStore("reminders").put({...item,notified:true});
-    }
-  }
-}
-
-
-
-/* Private Vault — MySpace */
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-const VAULT_CATEGORIES = [
-  "Passwords",
-  "Recovery",
-  "Personal",
-  "Property",
-  "Other"
-];
-
-function randomBytes(length) {
-  return crypto.getRandomValues(new Uint8Array(length));
-}
+/* PASSWORD HASHING */
 
 async function hashAppPassword(password, salt) {
   const material = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(password),
+    encoder.encode(password),
     "PBKDF2",
     false,
     ["deriveBits"]
   );
 
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: new Uint8Array(salt),
-      iterations: 600000,
-      hash: "SHA-256"
-    },
-    material,
-    256
-  );
+  const bits = await crypto.subtle.deriveBits({
+    name: "PBKDF2",
+    salt: new Uint8Array(salt),
+    iterations: 600000,
+    hash: "SHA-256"
+  }, material, 256);
 
   return Array.from(new Uint8Array(bits))
     .map(byte => byte.toString(16).padStart(2, "0"))
     .join("");
 }
-  
+
 async function deriveKey(password, salt) {
   const material = await crypto.subtle.importKey(
     "raw",
@@ -608,28 +430,715 @@ async function deriveKey(password, salt) {
     ["deriveKey"]
   );
 
-  return crypto.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt,
-      iterations: 600000,
-      hash: "SHA-256"
-    },
-    material,
-    { name: "AES-GCM", length: 256 },
+  return crypto.subtle.deriveKey({
+    name: "PBKDF2",
+    salt,
+    iterations: 600000,
+    hash: "SHA-256"
+  }, material, {
+    name: "AES-GCM",
+    length: 256
+  }, false, ["encrypt", "decrypt"]);
+}
+
+/* NOTES ENCRYPTION KEY
+   A random Notes key is wrapped by the app password.
+   Changing the app password re-wraps the same Notes key.
+*/
+
+async function unlockNotesEncryptionKey(password) {
+  const savedSalt = await getSetting("notesKeySalt");
+  const wrapped = await getSetting("notesKeyWrap");
+
+  let rawKey;
+
+  if (savedSalt && wrapped) {
+    const wrappingKey = await deriveKey(
+      password,
+      new Uint8Array(savedSalt)
+    );
+
+    rawKey = await crypto.subtle.decrypt({
+      name: "AES-GCM",
+      iv: new Uint8Array(wrapped.iv)
+    }, wrappingKey, new Uint8Array(wrapped.data));
+
+  } else if (!savedSalt && !wrapped) {
+    rawKey = randomBytes(32);
+
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+
+    const wrappingKey = await deriveKey(password, salt);
+
+    const encrypted = await crypto.subtle.encrypt({
+      name: "AES-GCM",
+      iv
+    }, wrappingKey, rawKey);
+
+    await setting("notesKeySalt", Array.from(salt));
+    await setting("notesKeyWrap", {
+      iv: Array.from(iv),
+      data: Array.from(new Uint8Array(encrypted))
+    });
+
+  } else {
+    throw new Error("Notes encryption settings are incomplete.");
+  }
+
+  notesEncryptionKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    { name: "AES-GCM" },
     false,
     ["encrypt", "decrypt"]
   );
 }
 
-async function encryptText(text, key) {
+async function changeNotesEncryptionPassword(oldPassword, newPassword) {
+  const salt = await getSetting("notesKeySalt");
+  const wrapped = await getSetting("notesKeyWrap");
+
+  if (!salt && !wrapped) {
+    return unlockNotesEncryptionKey(newPassword);
+  }
+
+  if (!salt || !wrapped) {
+    throw new Error("Notes encryption settings are incomplete.");
+  }
+
+  const oldWrappingKey = await deriveKey(
+    oldPassword,
+    new Uint8Array(salt)
+  );
+
+  const rawKey = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: new Uint8Array(wrapped.iv)
+  }, oldWrappingKey, new Uint8Array(wrapped.data));
+
+  const newSalt = randomBytes(16);
+  const newIV = randomBytes(12);
+
+  const newWrappingKey = await deriveKey(
+    newPassword,
+    newSalt
+  );
+
+  const newWrappedKey = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv: newIV
+  }, newWrappingKey, rawKey);
+
+  await setting("notesKeySalt", Array.from(newSalt));
+  await setting("notesKeyWrap", {
+    iv: Array.from(newIV),
+    data: Array.from(new Uint8Array(newWrappedKey))
+  });
+
+  notesEncryptionKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptNoteData(value) {
+  if (!notesEncryptionKey) {
+    throw new Error("Unlock MySpace first.");
+  }
+
   const iv = randomBytes(12);
+
+  const encrypted = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv
+  }, notesEncryptionKey, encoder.encode(JSON.stringify(value)));
+
+  return {
+    encrypted: true,
+    iv: Array.from(iv),
+    data: Array.from(new Uint8Array(encrypted))
+  };
+}
+
+async function decryptNoteData(record) {
+  if (!notesEncryptionKey) {
+    throw new Error("Unlock MySpace first.");
+  }
+
+  const decrypted = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: new Uint8Array(record.iv)
+  }, notesEncryptionKey, new Uint8Array(record.data));
+
+  return JSON.parse(decoder.decode(decrypted));
+}
+
+/* NAVIGATION */
+
+function showPanel(id, button) {
+  document.getElementById("home").style.display = "none";
+
+  document.querySelectorAll(".panel")
+    .forEach(panel => panel.classList.remove("active"));
+
+  const panel = document.getElementById(id);
+  if (!panel) return;
+
+  panel.classList.add("active");
+
+  document.querySelectorAll(".bottom button")
+    .forEach(item => item.classList.remove("selected"));
+
+  if (button) button.classList.add("selected");
+
+  if (id === "notes") renderNotes();
+  if (id === "photos") renderPhotos();
+  if (id === "files") renderFiles();
+  if (id === "reminders") renderReminders();
+  if (id === "vault") prepareVault();
+}
+
+function goHome(button) {
+  document.getElementById("home").style.display = "block";
+
+  document.querySelectorAll(".panel")
+    .forEach(panel => panel.classList.remove("active"));
+
+  document.querySelectorAll(".bottom button")
+    .forEach(item => item.classList.remove("selected"));
+
+  button.classList.add("selected");
+}
+
+/* NOTES */
+
+async function saveNote() {
+  const title = document.getElementById("noteTitle").value.trim();
+  const text = document.getElementById("noteText").value.trim();
+
+  if (!title && !text) {
+    return alert("Enter a note first.");
+  }
+
+  try {
+    const encrypted = await encryptNoteData({ title, text });
+
+    await addRecord("notes", {
+      ...encrypted,
+      created: new Date().toISOString()
+    });
+
+    document.getElementById("noteTitle").value = "";
+    document.getElementById("noteText").value = "";
+
+    await renderNotes();
+    alert("Encrypted note saved.");
+
+  } catch (error) {
+    alert(error.message || "Unable to save note.");
+  }
+}
+
+async function renderNotes() {
+  const list = document.getElementById("notesList");
+  const records = (await getAll("notes")).reverse();
+
+  list.innerHTML = "";
+
+  for (const record of records) {
+    const el = document.createElement("div");
+    el.className = "item";
+
+    const heading = document.createElement("h3");
+    const paragraph = document.createElement("p");
+
+    if (record.encrypted) {
+      if (!notesEncryptionKey) {
+        heading.textContent = "🔒 Encrypted note";
+        paragraph.textContent = "Unlock MySpace to view this note.";
+      } else {
+        try {
+          const note = await decryptNoteData(record);
+          heading.textContent = note.title || "Untitled";
+          paragraph.textContent = note.text || "";
+
+          if (note.audio) {
+            const audio = document.createElement("audio");
+            audio.controls = true;
+
+            const blob = new Blob(
+              [new Uint8Array(note.audio)],
+              { type: note.mimeType || "audio/webm" }
+            );
+
+            audio.src = URL.createObjectURL(blob);
+            el.append(audio);
+          }
+        } catch (error) {
+          heading.textContent = "Unable to decrypt note";
+          paragraph.textContent = "Check your app password.";
+        }
+      }
+    } else {
+      heading.textContent = record.title || "Untitled";
+      paragraph.textContent = record.text || "";
+
+      if (record.audio instanceof Blob) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = URL.createObjectURL(record.audio);
+        el.append(audio);
+      }
+    }
+
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "Delete";
+
+    del.onclick = async () => {
+      if (confirm("Delete this note?")) {
+        await removeRecord("notes", record.id);
+        await renderNotes();
+      }
+    };
+
+    el.append(heading, paragraph, del);
+    list.append(el);
+  }
+}
+
+/* VOICE NOTES */
+
+
+/* ===== MySpace: encrypted Photos, Files and Reminders ===== */
+
+async function putRecord(name, value) {
+  return new Promise((resolve, reject) => {
+    const request = store(name, "readwrite").put(value);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function requireDataPassword() {
+  if (!appPassword) {
+    alert("Please unlock MySpace or set an app password in Settings first.");
+    return false;
+  }
+  return true;
+}
+
+async function encryptPrivateRecord(value) {
+  if (!appPassword) throw new Error("MySpace is locked.");
+
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveKey(appPassword, salt);
 
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    encoder.encode(text)
+    encoder.encode(JSON.stringify(value))
   );
+
+  return {
+    encrypted: true,
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    data: Array.from(new Uint8Array(encrypted))
+  };
+}
+
+async function decryptPrivateRecord(record) {
+  if (!appPassword) throw new Error("MySpace is locked.");
+
+  if (!record.encrypted) return record;
+
+  const key = await deriveKey(
+    appPassword,
+    new Uint8Array(record.salt)
+  );
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+    key,
+    new Uint8Array(record.data)
+  );
+
+  return JSON.parse(decoder.decode(decrypted));
+}
+
+async function savePrivateRecord(storeName, value) {
+  const encrypted = await encryptPrivateRecord(value);
+  return addRecord(storeName, encrypted);
+}
+
+/* Photos */
+
+async function addPhotos() {
+  if (!requireDataPassword()) return;
+
+  const input = document.getElementById("photoInput");
+
+  try {
+    for (const file of input.files) {
+      if (!file.type.startsWith("image/")) continue;
+
+      const bytes = Array.from(
+        new Uint8Array(await file.arrayBuffer())
+      );
+
+      await savePrivateRecord("photos", {
+        name: file.name,
+        type: file.type,
+        bytes,
+        created: new Date().toISOString()
+      });
+    }
+
+    input.value = "";
+    await renderPhotos();
+    alert("Photos saved with encryption.");
+  } catch (error) {
+    console.error(error);
+    alert("Could not encrypt or save the photos.");
+  }
+}
+
+async function renderPhotos() {
+  const list = document.getElementById("photosList");
+  list.innerHTML = "";
+
+  if (!appPassword) {
+    list.textContent = "Unlock MySpace to view your encrypted photos.";
+    return;
+  }
+
+  const records = (await getAll("photos")).reverse();
+
+  for (const record of records) {
+    try {
+      let photo;
+
+      if (record.encrypted) {
+        photo = await decryptPrivateRecord(record);
+      } else {
+        // Migrate an older unencrypted photo when it is opened.
+        photo = {
+          name: record.name,
+          type: record.type,
+          bytes: Array.from(
+            new Uint8Array(await record.blob.arrayBuffer())
+          ),
+          created: record.created
+        };
+
+        const encrypted = await encryptPrivateRecord(photo);
+        await putRecord("photos", {
+          id: record.id,
+          ...encrypted
+        });
+      }
+
+      const blob = new Blob(
+        [new Uint8Array(photo.bytes)],
+        { type: photo.type || "image/jpeg" }
+      );
+
+      const url = URL.createObjectURL(blob);
+      const el = document.createElement("div");
+      el.className = "item";
+
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = photo.name || "Private photo";
+
+      const name = document.createElement("p");
+      name.textContent = photo.name || "Photo";
+
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+      del.onclick = async () => {
+        URL.revokeObjectURL(url);
+        await removeRecord("photos", record.id);
+        renderPhotos();
+      };
+
+      el.append(img, name, del);
+      list.append(el);
+    } catch (error) {
+      console.error(error);
+      const message = document.createElement("p");
+      message.textContent = "Unable to decrypt this photo.";
+      list.append(message);
+    }
+  }
+}
+
+/* Files */
+
+async function addFiles() {
+  if (!requireDataPassword()) return;
+
+  const input = document.getElementById("fileInput");
+
+  try {
+    for (const file of input.files) {
+      const bytes = Array.from(
+        new Uint8Array(await file.arrayBuffer())
+      );
+
+      await savePrivateRecord("files", {
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        bytes,
+        created: new Date().toISOString()
+      });
+    }
+
+    input.value = "";
+    await renderFiles();
+    alert("Files saved with encryption.");
+  } catch (error) {
+    console.error(error);
+    alert("Could not encrypt or save the files.");
+  }
+}
+
+async function renderFiles() {
+  const list = document.getElementById("filesList");
+  list.innerHTML = "";
+
+  if (!appPassword) {
+    list.textContent = "Unlock MySpace to view your encrypted files.";
+    return;
+  }
+
+  const records = (await getAll("files")).reverse();
+
+  for (const record of records) {
+    try {
+      let file;
+
+      if (record.encrypted) {
+        file = await decryptPrivateRecord(record);
+      } else {
+        // Migrate an older unencrypted file when it is opened.
+        file = {
+          name: record.name,
+          type: record.type,
+          bytes: Array.from(
+            new Uint8Array(await record.blob.arrayBuffer())
+          ),
+          created: record.created
+        };
+
+        const encrypted = await encryptPrivateRecord(file);
+        await putRecord("files", {
+          id: record.id,
+          ...encrypted
+        });
+      }
+
+      const el = document.createElement("div");
+      el.className = "item";
+
+      const name = document.createElement("p");
+      name.textContent = file.name || "File";
+
+      const open = document.createElement("button");
+      open.textContent = "Open";
+      open.onclick = () => {
+        const blob = new Blob(
+          [new Uint8Array(file.bytes)],
+          { type: file.type || "application/octet-stream" }
+        );
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.click();
+
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      };
+
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+      del.onclick = async () => {
+        await removeRecord("files", record.id);
+        renderFiles();
+      };
+
+      el.append(name, open, del);
+      list.append(el);
+    } catch (error) {
+      console.error(error);
+      const message = document.createElement("p");
+      message.textContent = "Unable to decrypt this file.";
+      list.append(message);
+    }
+  }
+}
+
+/* Reminders */
+
+async function saveReminder() {
+  if (!requireDataPassword()) return;
+
+  const title = document.getElementById("reminderTitle").value.trim();
+  const date = document.getElementById("reminderDate").value;
+  const details = document.getElementById("reminderDetails").value.trim();
+
+  if (!title || !date) {
+    return alert("Enter a title and date.");
+  }
+
+  try {
+    await savePrivateRecord("reminders", {
+      title,
+      date,
+      details,
+      done: false,
+      notified: false
+    });
+
+    document.getElementById("reminderTitle").value = "";
+    document.getElementById("reminderDate").value = "";
+    document.getElementById("reminderDetails").value = "";
+
+    await renderReminders();
+    alert("Reminder saved with encryption.");
+  } catch (error) {
+    console.error(error);
+    alert("Could not encrypt or save the reminder.");
+  }
+}
+
+async function renderReminders() {
+  const list = document.getElementById("remindersList");
+  list.innerHTML = "";
+
+  if (!appPassword) {
+    list.textContent = "Unlock MySpace to view your encrypted reminders.";
+    return;
+  }
+
+  const records = await getAll("reminders");
+  const reminders = [];
+
+  for (const record of records) {
+    try {
+      let reminder;
+
+      if (record.encrypted) {
+        reminder = await decryptPrivateRecord(record);
+      } else {
+        // Migrate an older unencrypted reminder when it is opened.
+        reminder = {
+          title: record.title,
+          date: record.date,
+          details: record.details,
+          done: !!record.done,
+          notified: !!record.notified
+        };
+
+        const encrypted = await encryptPrivateRecord(reminder);
+        await putRecord("reminders", {
+          id: record.id,
+          ...encrypted
+        });
+      }
+
+      reminders.push({ id: record.id, ...reminder });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  reminders.sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const item of reminders) {
+    const el = document.createElement("div");
+    el.className = "item";
+
+    const h = document.createElement("h3");
+    h.textContent = item.title;
+
+    const p = document.createElement("p");
+    p.textContent = item.details || "";
+
+    const date = document.createElement("small");
+    date.textContent = new Date(item.date).toLocaleString();
+
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "Delete";
+    del.onclick = async () => {
+      await removeRecord("reminders", item.id);
+      renderReminders();
+    };
+
+    el.append(h, p, date, document.createElement("br"), del);
+    list.append(el);
+  }
+}
+
+/* Reminder checking also reads encrypted records */
+
+async function checkReminders() {
+  if (
+    !appPassword ||
+    !("Notification" in window) ||
+    Notification.permission !== "granted"
+  ) return;
+
+  const records = await getAll("reminders");
+  const now = Date.now();
+
+  for (const record of records) {
+    try {
+      const item = await decryptPrivateRecord(record);
+
+      if (item.notified) continue;
+
+      const time = new Date(item.date).getTime();
+
+      if (time <= now && time > now - 60000) {
+        new Notification("MySpace Reminder", {
+          body: item.title
+        });
+
+        item.notified = true;
+
+        const encrypted = await encryptPrivateRecord(item);
+        await putRecord("reminders", {
+          id: record.id,
+          ...encrypted
+        });
+      }
+    } catch (error) {
+      console.error("Reminder check failed:", error);
+    }
+  }
+}
+  
+/* PRIVATE VAULT */
+
+async function encryptText(text, key) {
+  const iv = randomBytes(12);
+
+  const encrypted = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv
+  }, key, encoder.encode(text));
 
   return {
     iv: Array.from(iv),
@@ -638,14 +1147,10 @@ async function encryptText(text, key) {
 }
 
 async function decryptText(record, key) {
-  const decrypted = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: new Uint8Array(record.iv)
-    },
-    key,
-    new Uint8Array(record.data)
-  );
+  const decrypted = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: new Uint8Array(record.iv)
+  }, key, new Uint8Array(record.data));
 
   return decoder.decode(decrypted);
 }
@@ -670,7 +1175,7 @@ async function prepareVault() {
   document.getElementById("vaultContent")
     .classList.toggle("hidden", !vaultKey);
 
-  if (vaultKey) renderSecrets();
+  if (vaultKey) await renderSecrets();
 }
 
 async function createVault() {
@@ -709,12 +1214,9 @@ async function createVault() {
     document.getElementById("pinNew").value = "";
     document.getElementById("pinConfirm").value = "";
 
-    document.getElementById("vaultSetup").classList.add("hidden");
-    document.getElementById("vaultLogin").classList.add("hidden");
-    document.getElementById("vaultContent").classList.remove("hidden");
-
-    renderSecrets();
+    await prepareVault();
     alert("Private Vault created successfully.");
+
   } catch (error) {
     vaultKey = null;
     vaultPin = null;
@@ -756,10 +1258,7 @@ async function unlockVault() {
     document.getElementById("pinLogin").value = "";
     document.getElementById("vaultError").textContent = "";
 
-    document.getElementById("vaultLogin").classList.add("hidden");
-    document.getElementById("vaultContent").classList.remove("hidden");
-
-    renderSecrets();
+    await prepareVault();
 
   } catch (error) {
     vaultKey = null;
@@ -797,8 +1296,9 @@ async function saveSecret() {
     document.getElementById("secretTitle").value = "";
     document.getElementById("secretValue").value = "";
 
-    renderSecrets();
+    await renderSecrets();
     alert("Private information saved.");
+
   } catch (error) {
     alert("Could not save this information.");
   }
@@ -817,9 +1317,7 @@ async function renderSecrets() {
     el.className = "item";
 
     try {
-      const secret = JSON.parse(
-        await decryptText(item, vaultKey)
-      );
+      const secret = JSON.parse(await decryptText(item, vaultKey));
 
       const heading = document.createElement("h3");
       heading.textContent = secret.title;
@@ -872,25 +1370,19 @@ async function renderSecrets() {
       edit.onclick = async () => {
         if (!vaultKey) return;
 
-        const newTitle = prompt(
-          "Edit name:",
-          secret.title
-        );
-
+        const newTitle = prompt("Edit name:", secret.title);
         if (newTitle === null) return;
 
         const newValue = prompt(
           "Edit private information:",
           secret.value
         );
-
         if (newValue === null) return;
 
         const newCategory = prompt(
           "Category: Passwords, Recovery, Personal, Property, Other",
           secret.category
         );
-
         if (newCategory === null) return;
 
         if (!VAULT_CATEGORIES.includes(newCategory)) {
@@ -916,7 +1408,7 @@ async function renderSecrets() {
             id: item.id
           });
 
-          renderSecrets();
+          await renderSecrets();
           alert("Information updated.");
 
         } catch (error) {
@@ -931,18 +1423,11 @@ async function renderSecrets() {
       del.onclick = async () => {
         if (confirm("Permanently delete this secret?")) {
           await removeRecord("secrets", item.id);
-          renderSecrets();
+          await renderSecrets();
         }
       };
 
-      el.append(
-        heading,
-        category,
-        value,
-        reveal,
-        edit,
-        del
-      );
+      el.append(heading, category, value, reveal, edit, del);
 
     } catch (error) {
       const message = document.createElement("p");
@@ -959,143 +1444,187 @@ function lockVault() {
   vaultPin = null;
 
   document.getElementById("vaultContent").classList.add("hidden");
-
   document.getElementById("secretTitle").value = "";
   document.getElementById("secretValue").value = "";
 
   prepareVault();
 }
 
+/* APP PASSWORD */
+
 async function setAppPassword() {
-  const currentHash = await getSetting("appPasswordHash");
-  const currentSalt = await getSetting("appPasswordSalt");
-  const legacyPassword = await getSetting("appPassword");
+  try {
+    const currentHash = await getSetting("appPasswordHash");
+    const currentSalt = await getSetting("appPasswordSalt");
+    const legacyPassword = await getSetting("appPassword");
 
-  if (currentHash && currentSalt) {
-    const current = prompt("Enter your current app password");
-    if (!current) return;
+    let oldPassword = null;
 
-    const check = await hashAppPassword(current, currentSalt);
+    if (currentHash && currentSalt) {
+      oldPassword = prompt("Enter your current app password");
+      if (!oldPassword) return;
 
-    if (check !== currentHash) {
-      alert("Incorrect password.");
-      return;
+      const check = await hashAppPassword(oldPassword, currentSalt);
+
+      if (check !== currentHash) {
+        return alert("Incorrect password.");
+      }
+
+    } else if (legacyPassword) {
+      oldPassword = prompt("Enter your current app password");
+
+      if (oldPassword !== legacyPassword) {
+        return alert("Incorrect password.");
+      }
     }
-  } else if (legacyPassword) {
-    const current = prompt("Enter your current app password");
-    if (current !== legacyPassword) {
-      alert("Incorrect password.");
-      return;
+
+    const next = prompt(
+      "Create a new app password (at least 10 characters)"
+    );
+
+    if (!next || next.length < 10) {
+      return alert("Password must be at least 10 characters.");
     }
+
+    if (oldPassword) {
+      await changeNotesEncryptionPassword(oldPassword, next);
+    } else {
+      await unlockNotesEncryptionKey(next);
+    }
+
+    const salt = randomBytes(16);
+    const hash = await hashAppPassword(next, salt);
+
+    await setting("appPasswordSalt", Array.from(salt));
+    await setting("appPasswordHash", hash);
+    await setting("appPassword", undefined);
+
+    appPassword = next;
+
+    alert("App password updated securely.");
+
+  } catch (error) {
+    alert(
+      "Password update failed. Your existing app password has not been changed. " +
+      (error.message || "")
+    );
   }
+}
 
-  const next = prompt("Create a new app password (at least 10 characters)");
+/* App unlock and lock */
 
-  if (!next || next.length < 10) {
-    alert("Password must be at least 10 characters.");
-    return;
+async function unlockApp() {
+  const saved = await getSetting("appPassword");
+  const entered = document.getElementById("appUnlock").value;
+
+  if (entered === saved && saved) {
+    appPassword = saved;
+
+    document.getElementById("lockScreen").style.display = "none";
+    document.getElementById("appUnlock").value = "";
+    document.getElementById("lockError").textContent = "";
+
+    await renderPhotos();
+    await renderFiles();
+    await renderReminders();
+    await checkReminders();
+  } else {
+    document.getElementById("lockError").textContent =
+      "Incorrect password.";
   }
-
-  const salt = Array.from(
-    crypto.getRandomValues(new Uint8Array(16))
-  );
-
-  const hash = await hashAppPassword(next, salt);
-
-  await setting("appPasswordSalt", salt);
-  await setting("appPasswordHash", hash);
-  await setting("appPassword", undefined);
-
-  alert("App password updated securely.");
 }
 
 async function lockApp() {
-  const savedHash = await getSetting("appPasswordHash");
-  const salt = await getSetting("appPasswordSalt");
+  const saved = await getSetting("appPassword");
 
-  if (!savedHash || !salt) {
+  if (!saved) {
     alert("Set an app password in Settings first.");
     return;
   }
 
+  appPassword = null;
   lockVault();
+
+  document.getElementById("photosList").innerHTML = "";
+  document.getElementById("filesList").innerHTML = "";
+  document.getElementById("remindersList").innerHTML = "";
+
   document.getElementById("lockScreen").style.display = "flex";
 }
 
-async function unlockApp() {
-  const password = document.getElementById("appUnlock").value;
-  const error = document.getElementById("lockError");
+/* Lock private data when leaving the page */
 
-  if (!password) {
-    error.textContent = "Enter your app password.";
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && appPassword) {
+    lockApp();
+  }
+});
+  
+/* DATA DELETION */
+
+async function clearAllData() {
+  if (!confirm("Delete ALL MySpace data on this device? This cannot be undone.")) {
     return;
   }
 
-  try {
-    const salt = await getSetting("appPasswordSalt");
-    const savedHash = await getSetting("appPasswordHash");
+  if (!confirm("Are you absolutely sure?")) return;
 
-    if (!salt || !savedHash) {
-      error.textContent = "App password not configured. Please reset it in Settings.";
-      return;
-    }
-
-    const enteredHash = await hashAppPassword(password, salt);
-
-    if (enteredHash === savedHash) {
-      document.getElementById("lockScreen").style.display = "none";
-      document.getElementById("appUnlock").value = "";
-      error.textContent = "";
-    } else {
-      error.textContent = "Incorrect password.";
-    }
-  } catch (e) {
-    error.textContent = "Unable to verify password. Please try again.";
-  }
-}
-
-async function clearAllData() {
-  if(!confirm("Delete ALL MySpace data on this device? This cannot be undone.")) return;
-  if(!confirm("Are you absolutely sure?")) return;
   db.close();
-  await new Promise((resolve,reject)=>{
-    const request=indexedDB.deleteDatabase(DB_NAME);
-    request.onsuccess=resolve;
-    request.onerror=()=>reject(request.error);
+
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
   });
+
   alert("MySpace data deleted.");
   location.reload();
 }
 
-document.addEventListener("visibilitychange", () => {
+/* AUTOMATIC LOCK */
+
+document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
+    appPassword = null;
+    notesEncryptionKey = null;
+
     lockVault();
 
-    const savedHash = getSetting("appPasswordHash");
+    try {
+      const savedHash = await getSetting("appPasswordHash");
 
-    savedHash.then(hash => {
-      if (hash) {
+      if (savedHash) {
         document.getElementById("lockScreen").style.display = "flex";
       }
-    });
+    } catch (error) {
+      console.error("Automatic lock error:", error);
+    }
   }
 });
 
-(async()=>{
-  try {
-    db=await openDB();
-    checkReminders();
-    setInterval(checkReminders,30000);
- const savedHash = await getSetting("appPasswordHash");
+/* STARTUP */
 
-if (savedHash) {
-  document.getElementById("lockScreen").style.display = "flex";
-}
-  } catch(e) {
+(async () => {
+  try {
+    db = await openDB();
+
+    await checkReminders();
+    setInterval(() => {
+      checkReminders().catch(console.error);
+    }, 30000);
+
+    const savedHash = await getSetting("appPasswordHash");
+
+    if (savedHash) {
+      document.getElementById("lockScreen").style.display = "flex";
+    }
+
+  } catch (error) {
     alert("MySpace could not open its local database. Please reload.");
-    console.error(e);
+    console.error(error);
   }
 })();
+
 </script>
   <script>
 if ("serviceWorker" in navigator) {
