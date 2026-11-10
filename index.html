@@ -1067,8 +1067,18 @@ async function clearAllData() {
   location.reload();
 }
 
-document.addEventListener("visibilitychange",()=>{
-  if(document.hidden) lockVault();
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    lockVault();
+
+    const savedHash = getSetting("appPasswordHash");
+
+    savedHash.then(hash => {
+      if (hash) {
+        document.getElementById("lockScreen").style.display = "flex";
+      }
+    });
+  }
 });
 
 (async()=>{
