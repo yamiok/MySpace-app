@@ -274,7 +274,7 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
     <h2>⚙️ Settings</h2>
     <p>MySpace stores information in this browser on this device.</p>
     <div class="notice">
-      This prototype does not yet implement native iPhone Face ID protection. Its app password screen is not a substitute for iOS-level biometric security.
+      MySpace does not use Face ID. Protect your data with your app password and Private Vault credentials.
     </div>
     <button class="secondary" onclick="setAppPassword()">Set or Change App Password</button>
     <button class="secondary" onclick="lockApp()">Lock MySpace</button>
@@ -1624,6 +1624,189 @@ document.addEventListener("visibilitychange", async () => {
     console.error(error);
   }
 })();
+
+
+
+/* ===== CONSOLIDATED MYSPACE REPAIRS ===== */
+
+/* Correct hashed-password unlock and restore the Notes encryption key. */
+async function unlockApp() {
+  const entered = document.getElementById("appUnlock").value;
+  const errorBox = document.getElementById("lockError");
+  try {
+    if (!entered) { errorBox.textContent = "Enter your app password."; return; }
+    const savedHash = await getSetting("appPasswordHash");
+    const savedSalt = await getSetting("appPasswordSalt");
+    const legacyPassword = await getSetting("appPassword");
+    let valid = false;
+    if (savedHash && savedSalt) {
+      valid = (await hashAppPassword(entered, savedSalt)) === savedHash;
+    } else if (legacyPassword) {
+      valid = entered === legacyPassword;
+    }
+    if (!valid) { errorBox.textContent = "Incorrect password."; return; }
+    appPassword = entered;
+    await unlockNotesEncryptionKey(entered);
+    document.getElementById("lockScreen").style.display = "none";
+    document.getElementById("appUnlock").value = "";
+    errorBox.textContent = "";
+    await renderNotes();
+    await renderPhotos();
+    await renderFiles();
+    await renderReminders();
+    await checkReminders();
+  } catch (error) {
+    appPassword = null;
+    notesEncryptionKey = null;
+    errorBox.textContent = "Unable to unlock. Check your password and encrypted data.";
+    console.error("Unlock error:", error);
+  }
+}
+
+async function lockApp() {
+  const savedHash = await getSetting("appPasswordHash");
+  const legacyPassword = await getSetting("appPassword");
+  if (!savedHash && !legacyPassword) {
+    alert("Set an app password in Settings first.");
+    return;
+  }
+  appPassword = null;
+  notesEncryptionKey = null;
+  lockVault();
+  for (const id of ["notesList", "photosList", "filesList", "remindersList"]) {
+    document.getElementById(id).innerHTML = "";
+  }
+  document.getElementById("lockScreen").style.display = "flex";
+}
+
+/* Re-render and migrate older plaintext notes only after successful unlock. */
+async function renderNotes() {
+  const list = document.getElementById("notesList");
+  list.innerHTML = "";
+  const records = (await getAll("notes")).reverse();
+  for (const record of records) {
+    const el = document.createElement("div");
+    el.className = "item";
+    const heading = document.createElement("h3");
+    const paragraph = document.createElement("p");
+    try {
+      let note;
+      if (record.encrypted) {
+        if (!notesEncryptionKey) {
+          heading.textContent = "🔒 Encrypted note";
+          paragraph.textContent = "Unlock MySpace to view this note.";
+          el.append(heading, paragraph);
+          list.append(el);
+          continue;
+        }
+        note = await decryptNoteData(record);
+      } else {
+        note = { title: record.title || "", text: record.text || "" };
+        if (record.audio instanceof Blob) {
+          note.audio = Array.from(new Uint8Array(await record.audio.arrayBuffer()));
+          note.mimeType = record.audio.type || "audio/webm";
+        }
+        if (notesEncryptionKey) {
+          const encrypted = await encryptNoteData(note);
+          await putRecord("notes", { id: record.id, created: record.created, ...encrypted });
+        }
+      }
+      heading.textContent = note.title || "Untitled";
+      paragraph.textContent = note.text || "";
+      if (note.audio) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = URL.createObjectURL(new Blob(
+          [new Uint8Array(note.audio)], { type: note.mimeType || "audio/webm" }
+        ));
+        el.append(audio);
+      }
+    } catch (error) {
+      heading.textContent = "Unable to decrypt note";
+      paragraph.textContent = "Check your app password.";
+      console.error(error);
+    }
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "Delete";
+    del.onclick = async () => {
+      if (confirm("Delete this note?")) {
+        await removeRecord("notes", record.id);
+        await renderNotes();
+      }
+    };
+    el.append(heading, paragraph, del);
+    list.append(el);
+  }
+}
+
+/* Restore voice-note recording. Audio is encrypted before it enters IndexedDB. */
+async function startRecording() {
+  try {
+    if (!appPassword || !notesEncryptionKey) {
+      alert("Unlock MySpace before recording."); return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      alert("Audio recording is not supported in this browser."); return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordingChunks = [];
+    const preferred = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"];
+    const mimeType = preferred.find(type => MediaRecorder.isTypeSupported(type));
+    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    recorder.ondataavailable = event => {
+      if (event.data && event.data.size) recordingChunks.push(event.data);
+    };
+    recorder.onstop = async () => {
+      try {
+        const blob = new Blob(recordingChunks, { type: recorder.mimeType || "audio/webm" });
+        const audio = Array.from(new Uint8Array(await blob.arrayBuffer()));
+        const encrypted = await encryptNoteData({ title: "Voice note", text: "", audio, mimeType: blob.type });
+        await addRecord("notes", { ...encrypted, created: new Date().toISOString() });
+        await renderNotes();
+        document.getElementById("recordStatus").textContent = "Voice note encrypted and saved.";
+      } catch (error) {
+        console.error(error);
+        alert("Unable to save the voice recording.");
+      } finally {
+        stream.getTracks().forEach(track => track.stop());
+        recordingChunks = [];
+      }
+    };
+    recorder.start();
+    document.getElementById("recordStatus").textContent = "Recording…";
+  } catch (error) {
+    console.error(error);
+    alert("Microphone access was not granted or recording could not start.");
+  }
+}
+
+function stopRecording() {
+  if (recorder && recorder.state === "recording") {
+    recorder.stop();
+    document.getElementById("recordStatus").textContent = "Saving encrypted voice note…";
+  }
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    alert("Notifications are not supported by this browser."); return;
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      alert("Notification permission enabled.");
+      await checkReminders();
+    } else {
+      alert("Notification permission was not granted.");
+    }
+  } catch (error) {
+    console.error(error);
+    alert("Unable to enable notifications.");
+  }
+}
+
+/* Keep PIN rule explicit: exactly six numeric digits. */
 
 </script>
   <script>
