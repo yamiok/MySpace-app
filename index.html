@@ -4,7 +4,7 @@
 <html lang="en">
 <head>
   <link rel="manifest" href="./manifest.json">
-<link rel="apple-touch-icon" href="./myspace-1024.png">
+<link rel="apple-touch-icon" href="./icons/myspace-1024.png">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1769d2">
@@ -617,6 +617,10 @@ function goHome(button) {
 /* NOTES */
 
 async function saveNote() {
+  if (!appPassword || !notesEncryptionKey) {
+    requestAppUnlock("Unlock MySpace before saving notes.");
+    return;
+  }
   const title = document.getElementById("noteTitle").value.trim();
   const text = document.getElementById("noteText").value.trim();
 
@@ -724,9 +728,28 @@ async function putRecord(name, value) {
   });
 }
 
+function requestAppUnlock(message = "Unlock MySpace to continue.") {
+  const lock = document.getElementById("lockScreen");
+  const error = document.getElementById("lockError");
+  if (lock) lock.style.display = "flex";
+  if (error) error.textContent = message;
+  const savedHash = getSetting("appPasswordHash");
+  const savedLegacy = getSetting("appPassword");
+  Promise.all([savedHash, savedLegacy]).then(([hash, legacy]) => {
+    if (!hash && !legacy) {
+      if (lock) lock.style.display = "none";
+      showPanel("settings");
+      alert("Set an app password in Settings before using encrypted sections.");
+    } else {
+      const field = document.getElementById("appUnlock");
+      if (field) field.focus();
+    }
+  }).catch(error => console.error("Password status check failed:", error));
+}
+
 function requireDataPassword() {
   if (!appPassword) {
-    alert("Please unlock MySpace or set an app password in Settings first.");
+    requestAppUnlock("Enter your app password to continue.");
     return false;
   }
   return true;
@@ -1511,55 +1534,6 @@ async function setAppPassword() {
   }
 }
 
-/* App unlock and lock */
-
-async function unlockApp() {
-  const saved = await getSetting("appPassword");
-  const entered = document.getElementById("appUnlock").value;
-
-  if (entered === saved && saved) {
-    appPassword = saved;
-
-    document.getElementById("lockScreen").style.display = "none";
-    document.getElementById("appUnlock").value = "";
-    document.getElementById("lockError").textContent = "";
-
-    await renderPhotos();
-    await renderFiles();
-    await renderReminders();
-    await checkReminders();
-  } else {
-    document.getElementById("lockError").textContent =
-      "Incorrect password.";
-  }
-}
-
-async function lockApp() {
-  const saved = await getSetting("appPassword");
-
-  if (!saved) {
-    alert("Set an app password in Settings first.");
-    return;
-  }
-
-  appPassword = null;
-  lockVault();
-
-  document.getElementById("photosList").innerHTML = "";
-  document.getElementById("filesList").innerHTML = "";
-  document.getElementById("remindersList").innerHTML = "";
-
-  document.getElementById("lockScreen").style.display = "flex";
-}
-
-/* Lock private data when leaving the page */
-
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden && appPassword) {
-    lockApp();
-  }
-});
-  
 /* DATA DELETION */
 
 async function clearAllData() {
@@ -1581,27 +1555,6 @@ async function clearAllData() {
   location.reload();
 }
 
-/* AUTOMATIC LOCK */
-
-document.addEventListener("visibilitychange", async () => {
-  if (document.hidden) {
-    appPassword = null;
-    notesEncryptionKey = null;
-
-    lockVault();
-
-    try {
-      const savedHash = await getSetting("appPasswordHash");
-
-      if (savedHash) {
-        document.getElementById("lockScreen").style.display = "flex";
-      }
-    } catch (error) {
-      console.error("Automatic lock error:", error);
-    }
-  }
-});
-
 /* STARTUP */
 
 (async () => {
@@ -1614,8 +1567,9 @@ document.addEventListener("visibilitychange", async () => {
     }, 30000);
 
     const savedHash = await getSetting("appPasswordHash");
+    const legacyPassword = await getSetting("appPassword");
 
-    if (savedHash) {
+    if (savedHash || legacyPassword) {
       document.getElementById("lockScreen").style.display = "flex";
     }
 
@@ -1629,7 +1583,7 @@ document.addEventListener("visibilitychange", async () => {
 
 /* ===== CONSOLIDATED MYSPACE REPAIRS ===== */
 
-/* Correct hashed-password unlock and restore the Notes encryption key. */
+/* One shared app-password unlock flow for every encrypted section. */
 async function unlockApp() {
   const entered = document.getElementById("appUnlock").value;
   const errorBox = document.getElementById("lockError");
@@ -1645,11 +1599,14 @@ async function unlockApp() {
       valid = entered === legacyPassword;
     }
     if (!valid) { errorBox.textContent = "Incorrect password."; return; }
-    appPassword = entered;
+
+    // Restore the shared password and Notes key before enabling any section.
     await unlockNotesEncryptionKey(entered);
+    appPassword = entered;
     document.getElementById("lockScreen").style.display = "none";
     document.getElementById("appUnlock").value = "";
     errorBox.textContent = "";
+
     await renderNotes();
     await renderPhotos();
     await renderFiles();
@@ -1677,6 +1634,7 @@ async function lockApp() {
     document.getElementById(id).innerHTML = "";
   }
   document.getElementById("lockScreen").style.display = "flex";
+  document.getElementById("lockError").textContent = "Enter your app password to continue.";
 }
 
 /* Re-render and migrate older plaintext notes only after successful unlock. */
@@ -1807,6 +1765,27 @@ async function enableNotifications() {
 }
 
 /* Keep PIN rule explicit: exactly six numeric digits. */
+
+// A single automatic-lock handler. It restores the same unlock screen on return.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && db) {
+    appPassword = null;
+    notesEncryptionKey = null;
+    vaultKey = null;
+    vaultPin = null;
+    ["notesList", "photosList", "filesList", "remindersList", "secretsList"].forEach(id => {
+      const element = document.getElementById(id);
+      if (element) element.innerHTML = "";
+    });
+    const hasPassword = getSetting("appPasswordHash").then(async hash => {
+      const legacy = await getSetting("appPassword");
+      if (hash || legacy) {
+        document.getElementById("lockScreen").style.display = "flex";
+        document.getElementById("lockError").textContent = "Enter your app password to continue.";
+      }
+    }).catch(console.error);
+  }
+});
 
 </script>
   <script>
