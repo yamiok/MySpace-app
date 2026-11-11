@@ -1,5 +1,3 @@
-
-
 {
   "name": "MySpace",
   "short_name": "MySpace",
@@ -12,7 +10,7 @@
   "theme_color": "#1769d2",
   "icons": [
     {
-      "src": "./icons/myspace-1024.png",
+      "src": "./myspace-1024.png",
       "sizes": "1024x1024",
       "type": "image/png"
     }

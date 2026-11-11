@@ -1,19 +1,13 @@
-MYSPACE OFFLINE PACKAGE
+MySpace offline package
 
-Files:
-- index.html: the MySpace app
-- manifest.json: Home Screen app metadata
-- service-worker.js: offline caching and fallback
-- icons/myspace-1024.png: Home Screen icon
+Upload these files DIRECTLY into the ROOT of your GitHub Pages repository (the same level as the existing index.html). There is no icons folder.
 
-INSTALL / UPDATE:
-1. Upload the contents of this folder to the root of your GitHub Pages repository, keeping the icons folder.
-2. Open the GitHub Pages address in Safari on the iPhone while online.
-3. Wait for the page to finish loading, then reload it once while online so the service worker can install and cache the app.
-4. In Safari, use Share > Add to Home Screen.
-5. Open MySpace once from the Home Screen while online. Then test by enabling Airplane Mode and reopening it.
+Files to upload:
+- index.html
+- manifest.json
+- service-worker.js
+- myspace-1024.png
 
-IMPORTANT:
-- The first visit and first offline-cache installation require internet access.
-- After successful installation, the app shell can load offline. Features that require external websites, cloud services, or notifications while the app is closed may still need internet / native iOS support.
-- Keep all files and the icons folder at the same relative paths shown here.
+Replace the existing index.html and service-worker.js, and add/replace manifest.json and myspace-1024.png. Keep all four files together in the repository root.
+
+Then open the GitHub Pages site in iPhone Safari while online, reload once, and use Share > Add to Home Screen. Open MySpace once while online to let the service worker cache the app. Then test in Airplane Mode.
