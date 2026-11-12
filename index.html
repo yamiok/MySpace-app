@@ -127,6 +127,16 @@ textarea { min-height:110px;resize:vertical; }
 }
 .lock-card .logo { margin:auto auto 15px; }
 footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
+
+/* Local search and pagination */
+.search-tools{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:14px 0 8px}
+.search-tools input,.search-tools select{margin:0;min-width:0;padding:10px;font-size:14px}
+.search-tools .search-wide{grid-column:1/-1}
+.page-tools{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin:12px 0}
+.page-tools button{padding:9px 13px}
+.page-tools button:disabled{opacity:.4;cursor:default}
+.search-count{font-size:12px;color:var(--muted);text-align:center;margin:6px 0}
+
 </style>
 </head>
 
@@ -614,6 +624,98 @@ function goHome(button) {
   button.classList.add("selected");
 }
 
+/* SEARCH + PAGINATION — runs locally on decrypted in-memory records only. */
+const mySpaceListState = {};
+const mySpaceListUrls = {};
+
+function prepareListTools(listId, rerender) {
+  const list = document.getElementById(listId);
+  const parent = list.parentNode;
+  let tools = document.getElementById(listId + "SearchTools");
+  let pages = document.getElementById(listId + "PageTools");
+  let count = document.getElementById(listId + "SearchCount");
+  if (!mySpaceListState[listId]) mySpaceListState[listId] = { name:"", text:"", from:"", to:"", size:10, page:1 };
+  const state = mySpaceListState[listId];
+
+  if (!tools) {
+    tools = document.createElement("div");
+    tools.id = listId + "SearchTools";
+    tools.className = "search-tools";
+    const name = document.createElement("input");
+    name.type = "search"; name.placeholder = "Search by name"; name.setAttribute("aria-label", "Search by name");
+    const text = document.createElement("input");
+    text.type = "search"; text.placeholder = "Search text"; text.setAttribute("aria-label", "Search text");
+    text.className = "search-wide";
+    const from = document.createElement("input");
+    from.type = "date"; from.setAttribute("aria-label", "From date");
+    const to = document.createElement("input");
+    to.type = "date"; to.setAttribute("aria-label", "To date");
+    const size = document.createElement("select");
+    size.setAttribute("aria-label", "Records per page");
+    [10,20,50,100].forEach(n => { const o=document.createElement("option"); o.value=String(n); o.textContent=n+" per page"; size.append(o); });
+    size.className = "search-wide";
+    name.addEventListener("input", () => { state.name=name.value; state.page=1; rerender(); });
+    text.addEventListener("input", () => { state.text=text.value; state.page=1; rerender(); });
+    from.addEventListener("change", () => { state.from=from.value; state.page=1; rerender(); });
+    to.addEventListener("change", () => { state.to=to.value; state.page=1; rerender(); });
+    size.addEventListener("change", () => { state.size=Number(size.value)||10; state.page=1; rerender(); });
+    tools.append(name,text,from,to,size);
+    parent.insertBefore(tools,list);
+  }
+  if (!pages) {
+    count=document.createElement("div"); count.id=listId+"SearchCount"; count.className="search-count";
+    pages=document.createElement("div"); pages.id=listId+"PageTools"; pages.className="page-tools";
+    parent.insertBefore(count,list.nextSibling);
+    parent.insertBefore(pages,count.nextSibling);
+  }
+  return {list,tools,pages,count,state};
+}
+
+function renderPagedRecords(listId, records, renderItem, rerender) {
+  const ui = prepareListTools(listId, rerender);
+  const {list,pages,count,state} = ui;
+  if (mySpaceListUrls[listId]) {
+    mySpaceListUrls[listId].forEach(url => URL.revokeObjectURL(url));
+  }
+  mySpaceListUrls[listId] = [];
+  const norm = value => String(value ?? "").toLocaleLowerCase();
+  const filtered = records.filter(record => {
+    const nameValue = norm(record.title || record.name || "");
+    const allText = norm(Object.entries(record).filter(([k,v]) => !["bytes","audio","blob"].includes(k) && (typeof v === "string" || typeof v === "number")).map(([,v])=>v).join(" "));
+    if (state.name && !nameValue.includes(norm(state.name))) return false;
+    if (state.text && !allText.includes(norm(state.text))) return false;
+    const dateValue = record.created || record.date || "";
+    const day = dateValue ? String(dateValue).slice(0,10) : "";
+    if (state.from && (!day || day < state.from)) return false;
+    if (state.to && (!day || day > state.to)) return false;
+    return true;
+  });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / state.size));
+  state.page = Math.min(Math.max(1,state.page),pageCount);
+  const start=(state.page-1)*state.size;
+  const visible=filtered.slice(start,start+state.size);
+  list.innerHTML="";
+  if (!visible.length) {
+    const empty=document.createElement("p"); empty.className="muted";
+    empty.textContent=records.length ? "No records match your search." : "No records yet.";
+    list.append(empty);
+  } else {
+    visible.forEach(record => renderItem(record,list,mySpaceListUrls[listId]));
+  }
+  count.textContent = filtered.length + " result" + (filtered.length===1?"":"s") + " · Page " + state.page + " of " + pageCount;
+  pages.innerHTML="";
+  const prev=document.createElement("button"); prev.className="secondary"; prev.textContent="Previous"; prev.disabled=state.page<=1;
+  prev.onclick=()=>{state.page--;rerender();};
+  const next=document.createElement("button"); next.className="secondary"; next.textContent="Next"; next.disabled=state.page>=pageCount;
+  next.onclick=()=>{state.page++;rerender();};
+  const first=Math.max(1,state.page-2), last=Math.min(pageCount,state.page+2);
+  if(first>1){const b=document.createElement("button");b.className="secondary";b.textContent="1";b.onclick=()=>{state.page=1;rerender();};pages.append(b);if(first>2){const dots=document.createElement("span");dots.textContent="…";pages.append(dots);}}
+  for(let n=first;n<=last;n++){const b=document.createElement("button");b.className=n===state.page?"":"secondary";b.textContent=String(n);b.disabled=n===state.page;b.setAttribute("aria-label","Page "+n);b.onclick=()=>{state.page=n;rerender();};pages.append(b);}
+  if(last<pageCount){if(last<pageCount-1){const dots=document.createElement("span");dots.textContent="…";pages.append(dots);}const b=document.createElement("button");b.className="secondary";b.textContent=String(pageCount);b.onclick=()=>{state.page=pageCount;rerender();};pages.append(b);}
+  pages.append(prev,next);
+}
+
+
 /* NOTES */
 
 async function saveNote() {
@@ -833,74 +935,25 @@ async function addPhotos() {
 }
 
 async function renderPhotos() {
-  const list = document.getElementById("photosList");
-  list.innerHTML = "";
-
-  if (!appPassword) {
-    list.textContent = "Unlock MySpace to view your encrypted photos.";
-    return;
-  }
-
-  const records = (await getAll("photos")).reverse();
-
-  for (const record of records) {
-    try {
+  const list=document.getElementById("photosList");
+  if(!appPassword){list.textContent="Unlock MySpace to view your encrypted photos.";return;}
+  const prepared=[];
+  for(const record of (await getAll("photos")).reverse()){
+    try{
       let photo;
-
-      if (record.encrypted) {
-        photo = await decryptPrivateRecord(record);
-      } else {
-        // Migrate an older unencrypted photo when it is opened.
-        photo = {
-          name: record.name,
-          type: record.type,
-          bytes: Array.from(
-            new Uint8Array(await record.blob.arrayBuffer())
-          ),
-          created: record.created
-        };
-
-        const encrypted = await encryptPrivateRecord(photo);
-        await putRecord("photos", {
-          id: record.id,
-          ...encrypted
-        });
-      }
-
-      const blob = new Blob(
-        [new Uint8Array(photo.bytes)],
-        { type: photo.type || "image/jpeg" }
-      );
-
-      const url = URL.createObjectURL(blob);
-      const el = document.createElement("div");
-      el.className = "item";
-
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = photo.name || "Private photo";
-
-      const name = document.createElement("p");
-      name.textContent = photo.name || "Photo";
-
-      const del = document.createElement("button");
-      del.className = "danger";
-      del.textContent = "Delete";
-      del.onclick = async () => {
-        URL.revokeObjectURL(url);
-        await removeRecord("photos", record.id);
-        renderPhotos();
-      };
-
-      el.append(img, name, del);
-      list.append(el);
-    } catch (error) {
-      console.error(error);
-      const message = document.createElement("p");
-      message.textContent = "Unable to decrypt this photo.";
-      list.append(message);
-    }
+      if(record.encrypted) photo=await decryptPrivateRecord(record);
+      else {photo={name:record.name,type:record.type,bytes:Array.from(new Uint8Array(await record.blob.arrayBuffer())),created:record.created};const encrypted=await encryptPrivateRecord(photo);await putRecord("photos",{id:record.id,...encrypted});}
+      prepared.push({...photo,id:record.id,created:photo.created||record.created||""});
+    }catch(error){console.error("Photo decrypt/search preparation failed:",error);}
   }
+  renderPagedRecords("photosList",prepared,(photo,target,urls)=>{
+    const el=document.createElement("div");el.className="item";
+    const img=document.createElement("img");img.src=URL.createObjectURL(new Blob([new Uint8Array(photo.bytes||[])],{type:photo.type||"image/jpeg"}));img.alt=photo.name||"Private photo";urls.push(img.src);
+    const name=document.createElement("p");name.textContent=photo.name||"Photo";
+    const date=document.createElement("small");date.textContent=photo.created?new Date(photo.created).toLocaleString():"";
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{await removeRecord("photos",photo.id);await renderPhotos();};
+    el.append(img,name,date,del);target.append(el);
+  },renderPhotos);
 }
 
 /* Files */
@@ -934,81 +987,25 @@ async function addFiles() {
 }
 
 async function renderFiles() {
-  const list = document.getElementById("filesList");
-  list.innerHTML = "";
-
-  if (!appPassword) {
-    list.textContent = "Unlock MySpace to view your encrypted files.";
-    return;
-  }
-
-  const records = (await getAll("files")).reverse();
-
-  for (const record of records) {
-    try {
+  const list=document.getElementById("filesList");
+  if(!appPassword){list.textContent="Unlock MySpace to view your encrypted files.";return;}
+  const prepared=[];
+  for(const record of (await getAll("files")).reverse()){
+    try{
       let file;
-
-      if (record.encrypted) {
-        file = await decryptPrivateRecord(record);
-      } else {
-        // Migrate an older unencrypted file when it is opened.
-        file = {
-          name: record.name,
-          type: record.type,
-          bytes: Array.from(
-            new Uint8Array(await record.blob.arrayBuffer())
-          ),
-          created: record.created
-        };
-
-        const encrypted = await encryptPrivateRecord(file);
-        await putRecord("files", {
-          id: record.id,
-          ...encrypted
-        });
-      }
-
-      const el = document.createElement("div");
-      el.className = "item";
-
-      const name = document.createElement("p");
-      name.textContent = file.name || "File";
-
-      const open = document.createElement("button");
-      open.textContent = "Open";
-      open.onclick = () => {
-        const blob = new Blob(
-          [new Uint8Array(file.bytes)],
-          { type: file.type || "application/octet-stream" }
-        );
-
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.target = "_blank";
-        link.rel = "noopener";
-        link.click();
-
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
-      };
-
-      const del = document.createElement("button");
-      del.className = "danger";
-      del.textContent = "Delete";
-      del.onclick = async () => {
-        await removeRecord("files", record.id);
-        renderFiles();
-      };
-
-      el.append(name, open, del);
-      list.append(el);
-    } catch (error) {
-      console.error(error);
-      const message = document.createElement("p");
-      message.textContent = "Unable to decrypt this file.";
-      list.append(message);
-    }
+      if(record.encrypted) file=await decryptPrivateRecord(record);
+      else {file={name:record.name,type:record.type,bytes:Array.from(new Uint8Array(await record.blob.arrayBuffer())),created:record.created};const encrypted=await encryptPrivateRecord(file);await putRecord("files",{id:record.id,...encrypted});}
+      prepared.push({...file,id:record.id,created:file.created||record.created||""});
+    }catch(error){console.error("File decrypt/search preparation failed:",error);}
   }
+  renderPagedRecords("filesList",prepared,(file,target)=>{
+    const el=document.createElement("div");el.className="item";
+    const name=document.createElement("p");name.textContent=file.name||"File";
+    const date=document.createElement("small");date.textContent=file.created?new Date(file.created).toLocaleString():"";
+    const open=document.createElement("button");open.textContent="Open";open.onclick=()=>{const blob=new Blob([new Uint8Array(file.bytes||[])],{type:file.type||"application/octet-stream"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener";link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);};
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{await removeRecord("files",file.id);await renderFiles();};
+    el.append(name,date,open,del);target.append(el);
+  },renderFiles);
 }
 
 /* Reminders */
@@ -1046,72 +1043,26 @@ async function saveReminder() {
 }
 
 async function renderReminders() {
-  const list = document.getElementById("remindersList");
-  list.innerHTML = "";
-
-  if (!appPassword) {
-    list.textContent = "Unlock MySpace to view your encrypted reminders.";
-    return;
-  }
-
-  const records = await getAll("reminders");
-  const reminders = [];
-
-  for (const record of records) {
-    try {
+  const list=document.getElementById("remindersList");
+  if(!appPassword){list.textContent="Unlock MySpace to view your encrypted reminders.";return;}
+  const records=await getAll("reminders");const prepared=[];
+  for(const record of records){
+    try{
       let reminder;
-
-      if (record.encrypted) {
-        reminder = await decryptPrivateRecord(record);
-      } else {
-        // Migrate an older unencrypted reminder when it is opened.
-        reminder = {
-          title: record.title,
-          date: record.date,
-          details: record.details,
-          done: !!record.done,
-          notified: !!record.notified
-        };
-
-        const encrypted = await encryptPrivateRecord(reminder);
-        await putRecord("reminders", {
-          id: record.id,
-          ...encrypted
-        });
-      }
-
-      reminders.push({ id: record.id, ...reminder });
-    } catch (error) {
-      console.error(error);
-    }
+      if(record.encrypted) reminder=await decryptPrivateRecord(record);
+      else {reminder={title:record.title,date:record.date,details:record.details,done:!!record.done,notified:!!record.notified};const encrypted=await encryptPrivateRecord(reminder);await putRecord("reminders",{id:record.id,...encrypted});}
+      prepared.push({...reminder,id:record.id,created:reminder.created||record.created||reminder.date||""});
+    }catch(error){console.error("Reminder decrypt/search preparation failed:",error);}
   }
-
-  reminders.sort((a, b) => a.date.localeCompare(b.date));
-
-  for (const item of reminders) {
-    const el = document.createElement("div");
-    el.className = "item";
-
-    const h = document.createElement("h3");
-    h.textContent = item.title;
-
-    const p = document.createElement("p");
-    p.textContent = item.details || "";
-
-    const date = document.createElement("small");
-    date.textContent = new Date(item.date).toLocaleString();
-
-    const del = document.createElement("button");
-    del.className = "danger";
-    del.textContent = "Delete";
-    del.onclick = async () => {
-      await removeRecord("reminders", item.id);
-      renderReminders();
-    };
-
-    el.append(h, p, date, document.createElement("br"), del);
-    list.append(el);
-  }
+  prepared.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));
+  renderPagedRecords("remindersList",prepared,(item,target)=>{
+    const el=document.createElement("div");el.className="item";
+    const h=document.createElement("h3");h.textContent=item.title||"Reminder";
+    const p=document.createElement("p");p.textContent=item.details||"";
+    const date=document.createElement("small");date.textContent=item.date?new Date(item.date).toLocaleString():"";
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{await removeRecord("reminders",item.id);await renderReminders();};
+    el.append(h,p,date,document.createElement("br"),del);target.append(el);
+  },renderReminders);
 }
 
 /* Reminder checking also reads encrypted records */
@@ -1314,7 +1265,7 @@ async function saveSecret() {
       vaultKey
     );
 
-    await addRecord("secrets", encrypted);
+    await addRecord("secrets", { ...encrypted, created: new Date().toISOString() });
 
     document.getElementById("secretTitle").value = "";
     document.getElementById("secretValue").value = "";
@@ -1328,138 +1279,21 @@ async function saveSecret() {
 }
 
 async function renderSecrets() {
-  if (!vaultKey) return;
-
-  const list = document.getElementById("secretsList");
-  list.innerHTML = "";
-
-  const records = (await getAll("secrets")).reverse();
-
-  for (const item of records) {
-    const el = document.createElement("div");
-    el.className = "item";
-
-    try {
-      const secret = JSON.parse(await decryptText(item, vaultKey));
-
-      const heading = document.createElement("h3");
-      heading.textContent = secret.title;
-
-      const category = document.createElement("small");
-      category.textContent = secret.category;
-
-      const value = document.createElement("p");
-      value.textContent = "••••••••••••";
-
-      const reveal = document.createElement("button");
-      reveal.className = "secondary";
-      reveal.textContent = "Reveal";
-
-      let visible = false;
-
-      reveal.onclick = () => {
-        if (!vaultKey) return;
-
-        if (!visible) {
-          const enteredPin = prompt(
-            "Enter your exactly six-digit PIN to reveal this information."
-          );
-
-          if (enteredPin === null) return;
-
-          if (!/^\d{6}$/.test(enteredPin)) {
-            return alert("PIN must contain exactly six digits.");
-          }
-
-          if (enteredPin !== vaultPin) {
-            return alert("Incorrect PIN. Information remains hidden.");
-          }
-
-          visible = true;
-          value.textContent = secret.value;
-          reveal.textContent = "Hide";
-
-        } else {
-          visible = false;
-          value.textContent = "••••••••••••";
-          reveal.textContent = "Reveal";
-        }
-      };
-
-      const edit = document.createElement("button");
-      edit.className = "secondary";
-      edit.textContent = "Edit";
-
-      edit.onclick = async () => {
-        if (!vaultKey) return;
-
-        const newTitle = prompt("Edit name:", secret.title);
-        if (newTitle === null) return;
-
-        const newValue = prompt(
-          "Edit private information:",
-          secret.value
-        );
-        if (newValue === null) return;
-
-        const newCategory = prompt(
-          "Category: Passwords, Recovery, Personal, Property, Other",
-          secret.category
-        );
-        if (newCategory === null) return;
-
-        if (!VAULT_CATEGORIES.includes(newCategory)) {
-          return alert("Invalid category.");
-        }
-
-        if (!newTitle.trim() || !newValue) {
-          return alert("Name and information cannot be empty.");
-        }
-
-        try {
-          const encrypted = await encryptText(
-            JSON.stringify({
-              title: newTitle.trim(),
-              value: newValue,
-              category: newCategory
-            }),
-            vaultKey
-          );
-
-          await updateSecretRecord({
-            ...encrypted,
-            id: item.id
-          });
-
-          await renderSecrets();
-          alert("Information updated.");
-
-        } catch (error) {
-          alert("Could not update this information.");
-        }
-      };
-
-      const del = document.createElement("button");
-      del.className = "danger";
-      del.textContent = "Delete";
-
-      del.onclick = async () => {
-        if (confirm("Permanently delete this secret?")) {
-          await removeRecord("secrets", item.id);
-          await renderSecrets();
-        }
-      };
-
-      el.append(heading, category, value, reveal, edit, del);
-
-    } catch (error) {
-      const message = document.createElement("p");
-      message.textContent = "Unable to decrypt this entry.";
-      el.append(message);
-    }
-
-    list.append(el);
-  }
+  if(!vaultKey)return;
+  const records=(await getAll("secrets")).reverse();const prepared=[];
+  for(const item of records){try{const secret=JSON.parse(await decryptText(item,vaultKey));prepared.push({...secret,id:item.id,created:item.created||""});}catch(error){console.error("Secret decrypt/search preparation failed:",error);}}
+  renderPagedRecords("secretsList",prepared,(secret,target)=>{
+    const item=records.find(r=>r.id===secret.id);const el=document.createElement("div");el.className="item";
+    const heading=document.createElement("h3");heading.textContent=secret.title||"Untitled";
+    const category=document.createElement("small");category.textContent=secret.category||"";
+    const value=document.createElement("p");value.textContent="••••••••••••";
+    const reveal=document.createElement("button");reveal.className="secondary";reveal.textContent="Reveal";let visible=false;
+    reveal.onclick=()=>{if(!vaultKey)return;if(!visible){const pin=prompt("Enter your exactly six-digit PIN to reveal this information.");if(pin===null)return;if(!/^\d{6}$/.test(pin))return alert("PIN must contain exactly six digits.");if(pin!==vaultPin)return alert("Incorrect PIN. Information remains hidden.");visible=true;value.textContent=secret.value;reveal.textContent="Hide";}else{visible=false;value.textContent="••••••••••••";reveal.textContent="Reveal";}};
+    const edit=document.createElement("button");edit.className="secondary";edit.textContent="Edit";edit.onclick=async()=>{if(!vaultKey)return;const newTitle=prompt("Edit name:",secret.title);if(newTitle===null)return;const newValue=prompt("Edit private information:",secret.value);if(newValue===null)return;const newCategory=prompt("Category: Passwords, Recovery, Personal, Property, Other",secret.category);if(newCategory===null)return;if(!VAULT_CATEGORIES.includes(newCategory))return alert("Invalid category.");if(!newTitle.trim()||!newValue)return alert("Name and information cannot be empty.");try{const encrypted=await encryptText(JSON.stringify({title:newTitle.trim(),value:newValue,category:newCategory}),vaultKey);await updateSecretRecord({...encrypted,id:item.id,created:item.created||""});await renderSecrets();alert("Information updated.");}catch(error){alert("Could not update this information.");}};
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{if(confirm("Permanently delete this secret?")){await removeRecord("secrets",item.id);await renderSecrets();}};
+    const date=document.createElement("small");date.textContent=secret.created?new Date(secret.created).toLocaleString():"";
+    el.append(heading,category,value,reveal,edit,del,date);target.append(el);
+  },renderSecrets);
 }
 
 function lockVault() {
@@ -1639,63 +1473,39 @@ async function lockApp() {
 
 /* Re-render and migrate older plaintext notes only after successful unlock. */
 async function renderNotes() {
-  const list = document.getElementById("notesList");
-  list.innerHTML = "";
-  const records = (await getAll("notes")).reverse();
+  const records=(await getAll("notes")).reverse();
+  const prepared=[];
   for (const record of records) {
-    const el = document.createElement("div");
-    el.className = "item";
-    const heading = document.createElement("h3");
-    const paragraph = document.createElement("p");
     try {
       let note;
       if (record.encrypted) {
-        if (!notesEncryptionKey) {
-          heading.textContent = "🔒 Encrypted note";
-          paragraph.textContent = "Unlock MySpace to view this note.";
-          el.append(heading, paragraph);
-          list.append(el);
-          continue;
-        }
-        note = await decryptNoteData(record);
+        if (!notesEncryptionKey) continue;
+        note=await decryptNoteData(record);
       } else {
-        note = { title: record.title || "", text: record.text || "" };
+        note={title:record.title||"",text:record.text||""};
         if (record.audio instanceof Blob) {
-          note.audio = Array.from(new Uint8Array(await record.audio.arrayBuffer()));
-          note.mimeType = record.audio.type || "audio/webm";
+          note.audio=Array.from(new Uint8Array(await record.audio.arrayBuffer()));
+          note.mimeType=record.audio.type||"audio/webm";
         }
         if (notesEncryptionKey) {
-          const encrypted = await encryptNoteData(note);
-          await putRecord("notes", { id: record.id, created: record.created, ...encrypted });
+          const encrypted=await encryptNoteData(note);
+          await putRecord("notes",{id:record.id,created:record.created,...encrypted});
         }
       }
-      heading.textContent = note.title || "Untitled";
-      paragraph.textContent = note.text || "";
-      if (note.audio) {
-        const audio = document.createElement("audio");
-        audio.controls = true;
-        audio.src = URL.createObjectURL(new Blob(
-          [new Uint8Array(note.audio)], { type: note.mimeType || "audio/webm" }
-        ));
-        el.append(audio);
-      }
-    } catch (error) {
-      heading.textContent = "Unable to decrypt note";
-      paragraph.textContent = "Check your app password.";
-      console.error(error);
-    }
-    const del = document.createElement("button");
-    del.className = "danger";
-    del.textContent = "Delete";
-    del.onclick = async () => {
-      if (confirm("Delete this note?")) {
-        await removeRecord("notes", record.id);
-        await renderNotes();
-      }
-    };
-    el.append(heading, paragraph, del);
-    list.append(el);
+      prepared.push({...note,id:record.id,created:record.created||""});
+    } catch(error) { console.error("Note decrypt/search preparation failed:",error); }
   }
+  renderPagedRecords("notesList",prepared,(note,list,urls)=>{
+    const el=document.createElement("div"); el.className="item";
+    const heading=document.createElement("h3"); heading.textContent=note.title||"Untitled";
+    const paragraph=document.createElement("p"); paragraph.textContent=note.text||"";
+    el.append(heading,paragraph);
+    if(note.audio){const audio=document.createElement("audio");audio.controls=true;audio.src=URL.createObjectURL(new Blob([new Uint8Array(note.audio)],{type:note.mimeType||"audio/webm"}));urls.push(audio.src);el.append(audio);}
+    const date=document.createElement("small");date.textContent=note.created?new Date(note.created).toLocaleString():"";el.append(date);
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";
+    del.onclick=async()=>{if(confirm("Delete this note?")){await removeRecord("notes",note.id);await renderNotes();}};
+    el.append(del);list.append(el);
+  },renderNotes);
 }
 
 /* Restore voice-note recording. Audio is encrypted before it enters IndexedDB. */
