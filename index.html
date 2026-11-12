@@ -1862,7 +1862,23 @@ async function renderSecrets() {
       actions.append(save,cancel); form.append(label,titleInput,categorySelect,valueInput,actions); el.append(form); titleInput.focus();
     };
     const del=document.createElement("button"); del.className="danger"; del.textContent="Delete this entry";
-    del.onclick=async()=>{if(!vaultKey)return;const approved=confirm('Permanently delete only "'+(secret.title||"this entry")+'"?\n\nNo other Private Vault entries will be deleted.');if(!approved)return;try{await removeRecord("secrets",item.id);await renderSecrets();}catch(error){alert("This entry could not be deleted. Please try again.");}};
+    del.onclick=async()=>{
+      if(!vaultKey||!vaultPin)return alert("Vault is locked. Unlock it again before deleting private information.");
+      const pin=prompt("Verify your exactly six-digit Private Vault PIN before deleting this entry.");
+      if(pin===null)return;
+      if(!/^\d{6}$/.test(pin)||pin!==vaultPin)return alert("Incorrect PIN. Nothing was deleted.");
+      const entryName=secret.title||"this entry";
+      const approved=confirm('DELETE PRIVATE INFORMATION?\n\nYou are about to permanently delete "'+entryName+'".\n\nThis cannot be undone. Only this entry will be deleted.');
+      if(!approved)return;
+      try{
+        await removeRecord("secrets",item.id);
+        await renderSecrets();
+        alert("Private information deleted.");
+      }catch(error){
+        console.error("Private Vault deletion failed:",error);
+        alert("This entry could not be deleted. Your information has not been intentionally changed.");
+      }
+    };
     const date=document.createElement("small"); date.textContent=secret.created?new Date(secret.created).toLocaleString():"";
     el.append(heading,category,value,reveal,edit,del,date); target.append(el);
   },renderSecrets);
