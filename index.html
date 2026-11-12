@@ -262,8 +262,11 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
   <section id="files" class="panel">
     <h2>📁 My Files</h2>
     <p class="muted">Files, camera pictures and scanned documents are encrypted before local storage.</p>
-    <div class="actions" style="margin:10px 0">
-      <button type="button" class="secondary" onclick="exportAllFilesZip()">Export All Files (ZIP)</button>
+    <div class="item" style="margin:12px 0">
+      <strong>Export your files</strong>
+      <p class="muted">Save one file at a time, or export every file together in a ZIP archive.</p>
+      <button type="button" onclick="exportAllFilesZip()">Export All Files as ZIP</button>
+      <p class="muted">The exported copies are not encrypted. Keep them somewhere secure.</p>
     </div>
 
     <h3>Import files</h3>
@@ -709,20 +712,133 @@ const mySpaceListUrls = {};
 
 function prepareListTools(listId, rerender) {
   const list = document.getElementById(listId);
+  if (!list || !list.parentNode) {
+    throw new Error("MySpace could not find the list area: " + listId);
+  }
   const parent = list.parentNode;
-  const toggle = document.getElementById(listId + "SearchButton");
-  const tools = document.getElementById(listId + "SearchTools");
-  const mode = document.getElementById(listId + "SearchMode");
-  const query = document.getElementById(listId + "SearchQuery");
-  const from = document.getElementById(listId + "SearchFrom");
-  const to = document.getElementById(listId + "SearchTo");
-  const apply = document.getElementById(listId + "ApplySearch");
-  const clear = document.getElementById(listId + "ClearSearch");
-  const size = document.getElementById(listId + "PageSize");
-  let pages = document.getElementById(listId + "PageTools");
-  let count = document.getElementById(listId + "SearchCount");
-  if (!mySpaceListState[listId]) mySpaceListState[listId] = { mode:"name", query:"", from:"", to:"", size:10, page:1, applied:false, open:false };
+  const isSimpleSearch = listId === "photosList" || listId === "filesList";
+  const modes = isSimpleSearch
+    ? [["name", "Search by Name"], ["date", "Search by Date"]]
+    : [["name", "Search by Name"], ["text", "Search by Text"], ["date", "Search by Date"]];
+
+  function ensureElement(id, tag, className, host = parent) {
+    let element = document.getElementById(id);
+    if (!element) {
+      element = document.createElement(tag);
+      element.id = id;
+      if (className) element.className = className;
+      host.insertBefore(element, list);
+    }
+    return element;
+  }
+
+  const toggle = ensureElement(listId + "SearchButton", "button", "secondary");
+  toggle.type = "button";
+  toggle.textContent = toggle.textContent || "Search";
+
+  const tools = ensureElement(listId + "SearchTools", "div", "search-tools");
+
+  let mode = document.getElementById(listId + "SearchMode");
+  if (!mode) {
+    mode = document.createElement("select");
+    mode.id = listId + "SearchMode";
+    mode.className = "search-wide";
+    mode.setAttribute("aria-label", "Search " + listId.replace("List", "") + " by");
+    modes.forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      mode.append(option);
+    });
+    tools.append(mode);
+  }
+
+  let query = document.getElementById(listId + "SearchQuery");
+  if (!query) {
+    query = document.createElement("input");
+    query.id = listId + "SearchQuery";
+    query.type = "search";
+    query.className = "search-wide";
+    query.placeholder = "Enter name or text";
+    tools.append(query);
+  }
+
+  let from = document.getElementById(listId + "SearchFrom");
+  if (!from) {
+    from = document.createElement("input");
+    from.id = listId + "SearchFrom";
+    from.type = "date";
+    from.setAttribute("aria-label", "From date");
+    tools.append(from);
+  }
+
+  let to = document.getElementById(listId + "SearchTo");
+  if (!to) {
+    to = document.createElement("input");
+    to.id = listId + "SearchTo";
+    to.type = "date";
+    to.setAttribute("aria-label", "To date");
+    tools.append(to);
+  }
+
+  let apply = document.getElementById(listId + "ApplySearch");
+  if (!apply) {
+    apply = document.createElement("button");
+    apply.id = listId + "ApplySearch";
+    apply.type = "button";
+    apply.textContent = "Apply Search";
+    tools.append(apply);
+  }
+
+  let clear = document.getElementById(listId + "ClearSearch");
+  if (!clear) {
+    clear = document.createElement("button");
+    clear.id = listId + "ClearSearch";
+    clear.type = "button";
+    clear.className = "secondary";
+    clear.textContent = "Clear";
+    tools.append(clear);
+  }
+
+  let size = document.getElementById(listId + "PageSize");
+  if (!size) {
+    size = document.createElement("select");
+    size.id = listId + "PageSize";
+    size.className = "search-wide";
+    size.setAttribute("aria-label", "Records per page");
+    [["10","10 per page"],["20","20 per page"],["50","50 per page"],["100","100 per page"]].forEach(([value,label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      size.append(option);
+    });
+    tools.append(size);
+  }
+
+  // Keep the existing static Photos/Files controls inside their search container.
+  [mode, query, from, to, apply, clear, size].forEach(element => {
+    if (element.parentNode !== tools) tools.append(element);
+  });
+
+  if (!mySpaceListState[listId]) {
+    mySpaceListState[listId] = {
+      mode: "name", query: "", from: "", to: "",
+      size: 10, page: 1, applied: false, open: false
+    };
+  }
   const state = mySpaceListState[listId];
+
+  const allowedModes = modes.map(item => item[0]);
+  if (!allowedModes.includes(state.mode)) state.mode = "name";
+
+  function syncModeFields() {
+    const isDate = mode.value === "date";
+    query.hidden = isDate;
+    from.hidden = !isDate;
+    to.hidden = !isDate;
+    query.placeholder = mode.value === "text" ? "Enter words to find" : "Enter name";
+  }
+
   if (!toggle.dataset.bound) {
     toggle.addEventListener("click", () => {
       state.open = !state.open;
@@ -730,35 +846,74 @@ function prepareListTools(listId, rerender) {
       toggle.setAttribute("aria-expanded", String(state.open));
       toggle.textContent = state.open ? "Close Search" : "Search";
     });
+
     mode.addEventListener("change", () => {
       state.mode = mode.value;
-      const isDate = mode.value === "date";
-      query.hidden = isDate; from.hidden = !isDate; to.hidden = !isDate;
-      query.placeholder = "Enter name";
+      syncModeFields();
     });
-    query.addEventListener("input", () => state.query = query.value);
-    from.addEventListener("change", () => state.from = from.value);
-    to.addEventListener("change", () => state.to = to.value);
+    query.addEventListener("input", () => { state.query = query.value; });
+    from.addEventListener("change", () => { state.from = from.value; });
+    to.addEventListener("change", () => { state.to = to.value; });
+
     apply.addEventListener("click", () => {
-      state.mode=mode.value; state.query=query.value.trim(); state.from=from.value; state.to=to.value;
-      state.applied=true; state.page=1; rerender();
+      state.mode = mode.value;
+      state.query = query.value.trim();
+      state.from = from.value;
+      state.to = to.value;
+      state.applied = true;
+      state.page = 1;
+      rerender();
     });
+
     clear.addEventListener("click", () => {
-      state.query=""; state.from=""; state.to=""; state.applied=false; state.page=1; mode.value="name";
-      query.value=""; from.value=""; to.value=""; query.hidden=false; from.hidden=true; to.hidden=true; rerender();
+      state.mode = "name";
+      state.query = "";
+      state.from = "";
+      state.to = "";
+      state.applied = false;
+      state.page = 1;
+      mode.value = "name";
+      query.value = "";
+      from.value = "";
+      to.value = "";
+      syncModeFields();
+      rerender();
     });
-    size.addEventListener("change", () => { state.size=Number(size.value)||10; state.page=1; rerender(); });
+
+    size.addEventListener("change", () => {
+      state.size = Number(size.value) || 10;
+      state.page = 1;
+      rerender();
+    });
     toggle.dataset.bound = "1";
   }
-  if (!pages) {
-    count=document.createElement("div"); count.id=listId+"SearchCount"; count.className="search-count";
-    pages=document.createElement("div"); pages.id=listId+"PageTools"; pages.className="page-tools";
-    parent.insertBefore(count,list); parent.insertBefore(pages,list);
-  }
-  mode.value=state.mode; size.value=String(state.size);
-  return {list,tools,pages,count,state};
-}
 
+  mode.value = state.mode;
+  query.value = state.query;
+  from.value = state.from;
+  to.value = state.to;
+  size.value = String(state.size);
+  tools.hidden = !state.open;
+  toggle.setAttribute("aria-expanded", String(state.open));
+  toggle.textContent = state.open ? "Close Search" : "Search";
+  syncModeFields();
+
+  let pages = document.getElementById(listId + "PageTools");
+  let count = document.getElementById(listId + "SearchCount");
+  if (!count) {
+    count = document.createElement("div");
+    count.id = listId + "SearchCount";
+    count.className = "search-count";
+    parent.insertBefore(count, list);
+  }
+  if (!pages) {
+    pages = document.createElement("div");
+    pages.id = listId + "PageTools";
+    pages.className = "page-tools";
+    parent.insertBefore(pages, list);
+  }
+  return {list, tools, pages, count, state};
+}
 function renderPagedRecords(listId, records, renderItem, rerender) {
   const ui = prepareListTools(listId, rerender);
   const {list,pages,count,state} = ui;
@@ -1229,11 +1384,26 @@ async function createScannedPDF() {
 }
 
 /* Files export — exports decrypted copies without changing encrypted local records. */
-function downloadExportBlob(blob, filename) {
+async function downloadExportBlob(blob, filename) {
+  const safeName = filename || "MySpace-export";
+  // On iPhone/iPad, offer the native Share sheet so the user can choose Save to Files.
+  if (typeof File !== "undefined" && navigator.share && navigator.canShare) {
+    try {
+      const file = new File([blob], safeName, {type: blob.type || "application/octet-stream"});
+      if (navigator.canShare({files: [file]})) {
+        await navigator.share({files: [file], title: safeName});
+        return;
+      }
+    } catch (error) {
+      if (error && error.name === "AbortError") return;
+      console.warn("Share sheet unavailable; using browser download instead.", error);
+    }
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename || "MySpace-export";
+  link.download = safeName;
+  link.rel = "noopener";
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1243,7 +1413,7 @@ function downloadExportBlob(blob, filename) {
 async function exportOneFile(file) {
   if (!file || !Array.isArray(file.bytes)) return alert("This file could not be exported.");
   const blob = new Blob([new Uint8Array(file.bytes)], {type:file.type || "application/octet-stream"});
-  downloadExportBlob(blob, file.name || "MySpace-file");
+  await downloadExportBlob(blob, file.name || "MySpace-file");
 }
 
 function zipCRC32(bytes) {
@@ -1302,7 +1472,7 @@ async function exportAllFilesZip() {
     }
     if (!entries.length) return alert("There are no files to export.");
     const zip = makeStoredZip(entries);
-    downloadExportBlob(zip, "MySpace-Files-" + new Date().toISOString().slice(0,10) + ".zip");
+    await downloadExportBlob(zip, "MySpace-Files-" + new Date().toISOString().slice(0,10) + ".zip");
     alert(entries.length + " file(s) exported. The ZIP contains unencrypted copies; keep it somewhere safe.");
   } catch (error) {
     console.error("Files export failed:", error);
@@ -1359,7 +1529,7 @@ async function renderFiles() {
     const name=document.createElement("p");name.textContent=file.name||"File";
     const date=document.createElement("small");date.textContent=file.created?new Date(file.created).toLocaleString():"";
     const open=document.createElement("button");open.textContent="Open";open.onclick=()=>{const blob=new Blob([new Uint8Array(file.bytes||[])],{type:file.type||"application/octet-stream"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener";link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);};
-    const exportButton=document.createElement("button");exportButton.className="secondary";exportButton.textContent="Export";exportButton.onclick=()=>exportOneFile(file);
+    const exportButton=document.createElement("button");exportButton.className="secondary";exportButton.textContent="Export This File";exportButton.onclick=()=>exportOneFile(file);
     const rename=document.createElement("button");rename.className="secondary";rename.textContent="Rename";rename.onclick=async()=>{const next=prompt("Rename this file:",file.name||"File");if(next===null)return;const clean=next.trim();if(!clean)return alert("A file name is required.");const encrypted=await encryptPrivateRecord({...file,name:clean});await putRecord("files",{id:file.id,...encrypted});await renderFiles();};
     const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{if(confirm("Delete this file?")){await removeRecord("files",file.id);await renderFiles();}};
     el.append(name,date,open,exportButton,rename,del);target.append(el);
