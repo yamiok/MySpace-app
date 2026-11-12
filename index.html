@@ -264,9 +264,9 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
     <p class="muted">Files, camera pictures and scanned documents are encrypted before local storage.</p>
     <div class="item" style="margin:12px 0">
       <strong>Export your files</strong>
-      <p class="muted">Save one file at a time, or export every file together in a ZIP archive.</p>
+      <p class="muted">Save one file at a time, or export every file together in an encrypted ZIP backup.</p>
       <button type="button" onclick="exportAllFilesZip()">Export All Files as ZIP</button>
-      <p class="muted">The exported copies are not encrypted. Keep them somewhere secure.</p>
+      <p class="muted">Every exported file is encrypted with a separate export password. MySpace never exports plaintext copies.</p>
     </div>
 
     <h3>Import files</h3>
@@ -341,7 +341,7 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
       <button onclick="saveSecret()">Save Secret</button>
       <div id="secretsList"></div>
       <button class="secondary" onclick="exportPrivateVault()">Export Private Information</button>
-      <p class="muted">Exports only encrypted Private Vault entries. Your master password and six-digit PIN are required to unlock the exported data.</p>
+      <p class="muted">The entire export file is encrypted with a separate export password. Your Vault master password and six-digit PIN are not included. In-app restore is not yet available.</p>
       <button class="secondary" onclick="lockVault()">Lock Vault</button>
     </div>
   </section>
@@ -672,6 +672,7 @@ async function decryptNoteData(record) {
 /* NAVIGATION */
 
 function showPanel(id, button) {
+  if (id !== "vault" && vaultKey) lockVault();
   document.getElementById("home").style.display = "none";
 
   document.querySelectorAll(".panel")
@@ -695,6 +696,7 @@ function showPanel(id, button) {
 }
 
 function goHome(button) {
+  if (vaultKey) lockVault();
   document.getElementById("home").style.display = "block";
 
   document.querySelectorAll(".panel")
@@ -1383,37 +1385,56 @@ async function createScannedPDF() {
   }
 }
 
-/* Files export — exports decrypted copies without changing encrypted local records. */
+/* ENCRYPTED EXPORTS — plaintext is never written to an export file. */
+async function askExportPassword() {
+  const password = prompt("Create an export password (at least 12 characters). Keep it safe; it is required to decrypt this file.");
+  if (password === null) return null;
+  if (password.length < 12) { alert("Export password must contain at least 12 characters."); return null; }
+  const confirmation = prompt("Re-enter the export password to confirm.");
+  if (confirmation === null) return null;
+  if (password !== confirmation) { alert("The export passwords do not match. Nothing was exported."); return null; }
+  return password;
+}
+
+async function encryptExportBlob(plainBlob, password, exportKind) {
+  if (!crypto || !crypto.subtle) throw new Error("Secure encryption is unavailable in this browser context.");
+  const salt = randomBytes(16), iv = randomBytes(12);
+  const key = await deriveKey(password, salt);
+  const plainBytes = new Uint8Array(await plainBlob.arrayBuffer());
+  const cipher = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, plainBytes);
+  const envelope = {format:"MYSPACE-ENCRYPTED-EXPORT",version:1,kind:exportKind,cipher:"AES-256-GCM",kdf:"PBKDF2-SHA-256",iterations:600000,salt:Array.from(salt),iv:Array.from(iv),ciphertext:Array.from(new Uint8Array(cipher))};
+  return new Blob([JSON.stringify(envelope)], {type:"application/vnd.myspace.encrypted"});
+}
+
 async function downloadExportBlob(blob, filename) {
-  const safeName = filename || "MySpace-export";
-  // On iPhone/iPad, offer the native Share sheet so the user can choose Save to Files.
+  const safeName = filename || "MySpace-encrypted-export.myspace";
   if (typeof File !== "undefined" && navigator.share && navigator.canShare) {
     try {
-      const file = new File([blob], safeName, {type: blob.type || "application/octet-stream"});
-      if (navigator.canShare({files: [file]})) {
-        await navigator.share({files: [file], title: safeName});
-        return;
-      }
+      const file = new File([blob], safeName, {type:blob.type || "application/octet-stream"});
+      if (navigator.canShare({files:[file]})) { await navigator.share({files:[file],title:safeName}); return "shared"; }
     } catch (error) {
-      if (error && error.name === "AbortError") return;
-      console.warn("Share sheet unavailable; using browser download instead.", error);
+      if (error && error.name === "AbortError") return "cancelled";
+      console.warn("Native Share sheet unavailable; trying encrypted-file download.", error);
     }
   }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = safeName;
-  link.rel = "noopener";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  const url = URL.createObjectURL(blob), link = document.createElement("a");
+  link.href=url; link.download=safeName; link.rel="noopener"; document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return "download-started";
 }
 
 async function exportOneFile(file) {
+  if (!requireDataPassword()) return;
   if (!file || !Array.isArray(file.bytes)) return alert("This file could not be exported.");
-  const blob = new Blob([new Uint8Array(file.bytes)], {type:file.type || "application/octet-stream"});
-  await downloadExportBlob(blob, file.name || "MySpace-file");
+  const password = await askExportPassword(); if (password === null) return;
+  try {
+    const plain = new Blob([new Uint8Array(file.bytes)], {type:file.type || "application/octet-stream"});
+    const encrypted = await encryptExportBlob(plain,password,"single-file");
+    const base = String(file.name || "MySpace-file").replace(/[\\/:*?"<>|]/g,"_");
+    const result = await downloadExportBlob(encrypted,base+".myspace");
+    if (result === "cancelled") return alert("Export cancelled. No file was shared or downloaded.");
+    alert(result === "shared" ? "Encrypted file shared. Keep your export password safe; in-app restore is not included in this revision." : "Encrypted export download started. Keep your export password safe; in-app restore is not included in this revision.");
+  } catch(error) { console.error("Single-file encrypted export failed:",error); alert("Encrypted export failed. No unencrypted copy was created."); }
 }
 
 function zipCRC32(bytes) {
@@ -1458,26 +1479,24 @@ function makeStoredZip(entries) {
 
 async function exportAllFilesZip() {
   if (!requireDataPassword()) return;
+  const password = await askExportPassword(); if (password === null) return;
   try {
-    const records = (await getAll("files")).reverse();
-    const entries = [];
+    const records=(await getAll("files")).reverse(), entries=[];
     for (const record of records) {
       let file;
-      if (record.encrypted) file = await decryptPrivateRecord(record);
-      else if (record.blob) file = {name:record.name, type:record.type, bytes:Array.from(new Uint8Array(await record.blob.arrayBuffer()))};
+      if (record.encrypted) file=await decryptPrivateRecord(record);
+      else if (record.blob) file={name:record.name,type:record.type,bytes:Array.from(new Uint8Array(await record.blob.arrayBuffer()))};
       else continue;
       if (!Array.isArray(file.bytes)) continue;
-      let filename = String(file.name || "File").replace(/[\\/:*?"<>|]/g, "_").trim() || "File";
-      entries.push({name:filename, bytes:new Uint8Array(file.bytes)});
+      const filename=String(file.name || "File").replace(/[\\/:*?"<>|]/g,"_").trim() || "File";
+      entries.push({name:filename,bytes:new Uint8Array(file.bytes)});
     }
     if (!entries.length) return alert("There are no files to export.");
-    const zip = makeStoredZip(entries);
-    await downloadExportBlob(zip, "MySpace-Files-" + new Date().toISOString().slice(0,10) + ".zip");
-    alert(entries.length + " file(s) exported. The ZIP contains unencrypted copies; keep it somewhere safe.");
-  } catch (error) {
-    console.error("Files export failed:", error);
-    alert("Could not export files. Unlock MySpace and try again.");
-  }
+    const zip=makeStoredZip(entries), encrypted=await encryptExportBlob(zip,password,"files-zip");
+    const result=await downloadExportBlob(encrypted,"MySpace-Files-"+new Date().toISOString().slice(0,10)+".myspace");
+    if (result === "cancelled") return alert("Export cancelled. No file was shared or downloaded.");
+    alert(result === "shared" ? entries.length+" file(s) shared as one encrypted backup." : entries.length+" file(s): encrypted backup download started.");
+  } catch(error) { console.error("Files encrypted export failed:",error); alert("Could not create the encrypted files backup. No plaintext export was created."); }
 }
 
 /* Files */
@@ -1807,75 +1826,63 @@ async function saveSecret() {
 }
 
 async function renderSecrets() {
-  if(!vaultKey)return;
-  const records=(await getAll("secrets")).reverse();const prepared=[];
-  for(const item of records){try{const secret=JSON.parse(await decryptText(item,vaultKey));prepared.push({...secret,id:item.id,created:item.created||""});}catch(error){console.error("Secret decrypt/search preparation failed:",error);}}
+  if (!vaultKey) return;
+  const records=(await getAll("secrets")).reverse(), prepared=[];
+  for (const item of records) { try { const secret=JSON.parse(await decryptText(item,vaultKey)); prepared.push({...secret,id:item.id,created:item.created||""}); } catch(error) { console.error("Secret decrypt/search preparation failed:",error); } }
   renderPagedRecords("secretsList",prepared,(secret,target)=>{
-    const item=records.find(r=>r.id===secret.id);const el=document.createElement("div");el.className="item";
-    const heading=document.createElement("h3");heading.textContent=secret.title||"Untitled";
-    const category=document.createElement("small");category.textContent=secret.category||"";
-    const value=document.createElement("p");value.textContent="••••••••••••";
-    const reveal=document.createElement("button");reveal.className="secondary";reveal.textContent="Reveal";let visible=false;
-    reveal.onclick=()=>{if(!vaultKey)return;if(!visible){const pin=prompt("Enter your exactly six-digit PIN to reveal this information.");if(pin===null)return;if(!/^\d{6}$/.test(pin))return alert("PIN must contain exactly six digits.");if(pin!==vaultPin)return alert("Incorrect PIN. Information remains hidden.");visible=true;value.textContent=secret.value;reveal.textContent="Hide";}else{visible=false;value.textContent="••••••••••••";reveal.textContent="Reveal";}};
-    const edit=document.createElement("button");edit.className="secondary";edit.textContent="Edit";edit.onclick=async()=>{if(!vaultKey)return;const newTitle=prompt("Edit name:",secret.title);if(newTitle===null)return;const newValue=prompt("Edit private information:",secret.value);if(newValue===null)return;const newCategory=prompt("Category: Passwords, Recovery, Personal, Property, Other",secret.category);if(newCategory===null)return;if(!VAULT_CATEGORIES.includes(newCategory))return alert("Invalid category.");if(!newTitle.trim()||!newValue)return alert("Name and information cannot be empty.");try{const encrypted=await encryptText(JSON.stringify({title:newTitle.trim(),value:newValue,category:newCategory}),vaultKey);await updateSecretRecord({...encrypted,id:item.id,created:item.created||""});await renderSecrets();alert("Information updated.");}catch(error){alert("Could not update this information.");}};
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete this entry";del.onclick=async()=>{if(!vaultKey)return;const approved=confirm('Permanently delete only "'+(secret.title||"this entry")+'"?\n\nNo other Private Vault entries will be deleted.');if(!approved)return;try{await removeRecord("secrets",item.id);await renderSecrets();}catch(error){alert("This entry could not be deleted. Please try again.");}};
-    const date=document.createElement("small");date.textContent=secret.created?new Date(secret.created).toLocaleString():"";
-    el.append(heading,category,value,reveal,edit,del,date);target.append(el);
+    const item=records.find(record=>record.id===secret.id), el=document.createElement("div"); el.className="item";
+    const heading=document.createElement("h3"); heading.textContent=secret.title||"Untitled";
+    const category=document.createElement("small"); category.textContent=secret.category||"";
+    const value=document.createElement("p"); value.textContent="••••••••••••";
+    const reveal=document.createElement("button"); reveal.className="secondary"; reveal.textContent="Reveal"; let visible=false;
+    reveal.onclick=()=>{ if(!vaultKey)return; if(!visible){const pin=prompt("Enter your exactly six-digit PIN to reveal this information.");if(pin===null)return;if(!/^\d{6}$/.test(pin))return alert("PIN must contain exactly six digits.");if(pin!==vaultPin)return alert("Incorrect PIN. Information remains hidden.");visible=true;value.textContent=secret.value;reveal.textContent="Hide";}else{visible=false;value.textContent="••••••••••••";reveal.textContent="Reveal";} };
+    const edit=document.createElement("button"); edit.className="secondary"; edit.textContent="Edit";
+    edit.onclick=()=>{
+      if(!vaultKey)return;
+      const pin=prompt("Re-enter your exactly six-digit PIN to edit this record.");
+      if(pin===null)return;
+      if(!/^\d{6}$/.test(pin)||pin!==vaultPin)return alert("Incorrect PIN. The record remains closed.");
+      if(el.querySelector(".vault-edit-form"))return;
+      const form=document.createElement("div"); form.className="vault-edit-form"; form.style.cssText="display:grid;gap:9px;margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--light)";
+      const label=document.createElement("strong"); label.textContent="Edit private information";
+      const titleInput=document.createElement("input"); titleInput.type="text"; titleInput.autocomplete="off"; titleInput.value=secret.title||""; titleInput.setAttribute("aria-label","Private record name");
+      const categorySelect=document.createElement("select"); categorySelect.setAttribute("aria-label","Private record category");
+      VAULT_CATEGORIES.forEach(name=>{const option=document.createElement("option");option.value=name;option.textContent=name;categorySelect.append(option);}); categorySelect.value=secret.category||"Other";
+      const valueInput=document.createElement("textarea"); valueInput.rows=6; valueInput.autocomplete="off"; valueInput.value=secret.value||""; valueInput.setAttribute("aria-label","All private information");
+      const actions=document.createElement("div"); actions.className="actions";
+      const save=document.createElement("button"); save.textContent="Save Changes";
+      const cancel=document.createElement("button"); cancel.type="button"; cancel.className="secondary"; cancel.textContent="Cancel"; cancel.onclick=()=>{titleInput.value="";valueInput.value="";form.remove();};
+      save.onclick=async()=>{
+        if(!vaultKey||!vaultPin)return alert("Vault is locked. Unlock it again.");
+        const newTitle=titleInput.value.trim(),newValue=valueInput.value,newCategory=categorySelect.value;
+        if(!newTitle||!newValue.trim())return alert("Name and private information cannot be empty.");
+        try{const encrypted=await encryptText(JSON.stringify({title:newTitle,value:newValue,category:newCategory}),vaultKey);await updateSecretRecord({...encrypted,id:item.id,created:item.created||""});titleInput.value="";valueInput.value="";await renderSecrets();alert("Private information updated and encrypted.");}
+        catch(error){console.error("Private Vault edit failed:",error);alert("Could not update this information.");}
+      };
+      actions.append(save,cancel); form.append(label,titleInput,categorySelect,valueInput,actions); el.append(form); titleInput.focus();
+    };
+    const del=document.createElement("button"); del.className="danger"; del.textContent="Delete this entry";
+    del.onclick=async()=>{if(!vaultKey)return;const approved=confirm('Permanently delete only "'+(secret.title||"this entry")+'"?\n\nNo other Private Vault entries will be deleted.');if(!approved)return;try{await removeRecord("secrets",item.id);await renderSecrets();}catch(error){alert("This entry could not be deleted. Please try again.");}};
+    const date=document.createElement("small"); date.textContent=secret.created?new Date(secret.created).toLocaleString():"";
+    el.append(heading,category,value,reveal,edit,del,date); target.append(el);
   },renderSecrets);
 }
 
 async function exportPrivateVault() {
-  if (!vaultKey) {
-    alert("Unlock the Private Vault before exporting.");
-    return;
-  }
-
+  if(!vaultKey||!vaultPin)return alert("Unlock the Private Vault before exporting.");
+  const password=await askExportPassword(); if(password===null)return;
   try {
-    // Export only encrypted Private Vault records and the metadata needed
-    // to unlock them. No Notes, Photos, Files, Reminders, or app settings
-    // are included in this file.
-    const records = await getAll("secrets");
-    const salt = await getSetting("vaultSalt");
-    const verifier = await getSetting("vaultVerifier");
-
-    if (!salt || !verifier) {
-      throw new Error("Private Vault recovery metadata is missing.");
-    }
-
-    for (const record of records) {
-      if (!Array.isArray(record.iv) || !Array.isArray(record.data)) {
-        throw new Error("A Private Vault record is not in the expected encrypted format.");
-      }
-    }
-
-    const exportData = {
-      format: "MySpace-Private-Vault-Export",
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      encryption: "AES-GCM-256 / PBKDF2-SHA-256",
-      vaultSalt: salt,
-      vaultVerifier: verifier,
-      records: records
-    };
-
-    const blob = new Blob(
-      [JSON.stringify(exportData, null, 2)],
-      { type: "application/json" }
-    );
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    link.href = url;
-    link.download = "MySpace-Private-Vault-" + stamp + ".json";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    alert("Encrypted Private Vault export created. Keep this file private and remember your master password and six-digit PIN.");
-  } catch (error) {
-    console.error("Private Vault export failed:", error);
-    alert("Could not export the Private Vault. No data was deleted or changed.");
-  }
+    const records=await getAll("secrets"),salt=await getSetting("vaultSalt"),verifier=await getSetting("vaultVerifier");
+    if(!salt||!verifier)throw new Error("Private Vault recovery metadata is missing.");
+    for(const record of records){if(!Array.isArray(record.iv)||!Array.isArray(record.data))throw new Error("A Private Vault record is not encrypted in the expected format.");}
+    const exportData={format:"MySpace-Private-Vault-Export",version:2,exportedAt:new Date().toISOString(),encryptionAtRest:"AES-GCM-256",vaultSalt:salt,vaultVerifier:verifier,records};
+    const plain=new Blob([JSON.stringify(exportData)],{type:"application/json"});
+    const encrypted=await encryptExportBlob(plain,password,"private-vault");
+    const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+    const result=await downloadExportBlob(encrypted,"MySpace-Private-Vault-"+stamp+".myspace");
+    if(result==="cancelled")return alert("Export cancelled. No file was shared or downloaded.");
+    alert(result==="shared"?"Private Vault shared as an encrypted file. Keep your export password safe; in-app restore is not included in this revision.":"Private Vault encrypted export download started. Keep your export password safe; in-app restore is not included in this revision.");
+  } catch(error){console.error("Private Vault encrypted export failed:",error);alert("Could not export the Private Vault. No plaintext export was created and no data was changed.");}
 }
 
 function lockVault() {
@@ -1885,6 +1892,7 @@ function lockVault() {
   document.getElementById("vaultContent").classList.add("hidden");
   document.getElementById("secretTitle").value = "";
   document.getElementById("secretValue").value = "";
+  document.getElementById("secretsList").innerHTML = "";
 
   prepareVault();
 }
@@ -2227,4 +2235,5 @@ if ("serviceWorker" in navigator) {
 }
 </script>
 </body>
+<!-- MySpace Version 13: encrypted exports and hardened Private Vault editing/locking -->
 </html>
