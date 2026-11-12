@@ -156,6 +156,10 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
 .page-tools button{padding:9px 13px}
 .page-tools button:disabled{opacity:.4;cursor:default}
 .search-count{font-size:12px;color:var(--muted);text-align:center;margin:6px 0}
+/* Respect the HTML hidden attribute even when component styles set display. */
+.search-tools [hidden] { display:none !important; }
+.search-tools[hidden] { display:none !important; }
+#photosListSearchButton,#filesListSearchButton { display:inline-block !important; margin:12px 0 4px; }
 
 </style>
 </head>
@@ -243,14 +247,51 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
     <p class="muted">Choose photos to store inside MySpace.</p>
     <input id="photoInput" type="file" accept="image/*" multiple>
     <button onclick="addPhotos()">Add Photos</button>
+    <button type="button" class="secondary" id="photosListSearchButton" aria-expanded="false">Search</button>
+    <div id="photosListSearchTools" class="search-tools" hidden>
+      <select id="photosListSearchMode" class="search-wide" aria-label="Search Photos by"><option value="name">Search by Name</option><option value="date">Search by Date</option></select>
+      <input id="photosListSearchQuery" class="search-wide" type="search" placeholder="Enter name" aria-label="Photo name">
+      <input id="photosListSearchFrom" type="date" aria-label="From date" hidden>
+      <input id="photosListSearchTo" type="date" aria-label="To date" hidden>
+      <button type="button" id="photosListApplySearch">Apply Search</button><button type="button" class="secondary" id="photosListClearSearch">Clear</button>
+      <select id="photosListPageSize" class="search-wide" aria-label="Photos per page"><option value="10">10 per page</option><option value="20">20 per page</option><option value="50">50 per page</option><option value="100">100 per page</option></select>
+    </div>
     <div id="photosList"></div>
   </section>
 
   <section id="files" class="panel">
     <h2>📁 My Files</h2>
-    <p class="muted">Import documents and other files into MySpace.</p>
+    <p class="muted">Files, camera pictures and scanned documents are encrypted before local storage.</p>
+    <div class="actions" style="margin:10px 0">
+      <button type="button" class="secondary" onclick="exportAllFilesZip()">Export All Files (ZIP)</button>
+    </div>
+
+    <h3>Import files</h3>
     <input id="fileInput" type="file" multiple>
     <button onclick="addFiles()">Add Files</button>
+
+    <h3>Take a picture</h3>
+    <input id="cameraFileInput" type="file" accept="image/*" capture="environment">
+    <button onclick="saveCameraPicture()">Save Camera Picture</button>
+
+    <h3>Scan a document</h3>
+    <p class="muted">Capture or select each page. Add all pages, then combine them into one PDF.</p>
+    <input id="scanPageInput" type="file" accept="image/*" capture="environment" multiple>
+    <div class="actions">
+      <button class="secondary" onclick="addScanPages()">Add Scan Pages</button>
+      <button onclick="createScannedPDF()">Create PDF</button>
+      <button class="secondary" onclick="clearScanPages()">Clear Pages</button>
+    </div>
+    <p id="scanStatus" class="muted" aria-live="polite">No scan pages selected.</p>
+    <button type="button" class="secondary" id="filesListSearchButton" aria-expanded="false">Search</button>
+    <div id="filesListSearchTools" class="search-tools" hidden>
+      <select id="filesListSearchMode" class="search-wide" aria-label="Search Files by"><option value="name">Search by Name</option><option value="date">Search by Date</option></select>
+      <input id="filesListSearchQuery" class="search-wide" type="search" placeholder="Enter name" aria-label="File name">
+      <input id="filesListSearchFrom" type="date" aria-label="From date" hidden>
+      <input id="filesListSearchTo" type="date" aria-label="To date" hidden>
+      <button type="button" id="filesListApplySearch">Apply Search</button><button type="button" class="secondary" id="filesListClearSearch">Clear</button>
+      <select id="filesListPageSize" class="search-wide" aria-label="Files per page"><option value="10">10 per page</option><option value="20">20 per page</option><option value="50">50 per page</option><option value="100">100 per page</option></select>
+    </div>
     <div id="filesList"></div>
   </section>
 
@@ -669,79 +710,52 @@ const mySpaceListUrls = {};
 function prepareListTools(listId, rerender) {
   const list = document.getElementById(listId);
   const parent = list.parentNode;
-  let toggle = document.getElementById(listId + "SearchButton");
-  let tools = document.getElementById(listId + "SearchTools");
+  const toggle = document.getElementById(listId + "SearchButton");
+  const tools = document.getElementById(listId + "SearchTools");
+  const mode = document.getElementById(listId + "SearchMode");
+  const query = document.getElementById(listId + "SearchQuery");
+  const from = document.getElementById(listId + "SearchFrom");
+  const to = document.getElementById(listId + "SearchTo");
+  const apply = document.getElementById(listId + "ApplySearch");
+  const clear = document.getElementById(listId + "ClearSearch");
+  const size = document.getElementById(listId + "PageSize");
   let pages = document.getElementById(listId + "PageTools");
   let count = document.getElementById(listId + "SearchCount");
   if (!mySpaceListState[listId]) mySpaceListState[listId] = { mode:"name", query:"", from:"", to:"", size:10, page:1, applied:false, open:false };
   const state = mySpaceListState[listId];
-
-  if (!toggle) {
-    toggle = document.createElement("button");
-    toggle.id = listId + "SearchButton";
-    toggle.type = "button";
-    toggle.className = "secondary";
-    toggle.textContent = "Search";
-    toggle.setAttribute("aria-expanded", "false");
+  if (!toggle.dataset.bound) {
     toggle.addEventListener("click", () => {
       state.open = !state.open;
       tools.hidden = !state.open;
       toggle.setAttribute("aria-expanded", String(state.open));
       toggle.textContent = state.open ? "Close Search" : "Search";
     });
-    parent.insertBefore(toggle, list);
-  }
-
-  if (!tools) {
-    tools = document.createElement("div");
-    tools.id = listId + "SearchTools";
-    tools.className = "search-tools";
-    tools.hidden = true;
-
-    const mode = document.createElement("select");
-    mode.setAttribute("aria-label", "Search by");
-    [["name","Name"],["text","Text"],["date","Date"]].forEach(([value,label]) => {
-      const option=document.createElement("option"); option.value=value; option.textContent="Search by "+label; mode.append(option);
+    mode.addEventListener("change", () => {
+      state.mode = mode.value;
+      const isDate = mode.value === "date";
+      query.hidden = isDate; from.hidden = !isDate; to.hidden = !isDate;
+      query.placeholder = "Enter name";
     });
-    mode.value=state.mode;
-    mode.className="search-wide";
-
-    const query = document.createElement("input");
-    query.type="search"; query.placeholder="Enter name"; query.setAttribute("aria-label","Search query"); query.className="search-wide";
-    const from = document.createElement("input"); from.type="date"; from.setAttribute("aria-label","From date");
-    const to = document.createElement("input"); to.type="date"; to.setAttribute("aria-label","To date");
-    const apply = document.createElement("button"); apply.type="button"; apply.textContent="Apply Search";
-    const clear = document.createElement("button"); clear.type="button"; clear.className="secondary"; clear.textContent="Clear";
-    const size = document.createElement("select"); size.setAttribute("aria-label","Records per page");
-    [10,20,50,100].forEach(n=>{const o=document.createElement("option");o.value=String(n);o.textContent=n+" per page";size.append(o);});
-    size.className="search-wide";
-
-    function updateMode() {
-      state.mode=mode.value;
-      const isDate=state.mode==="date";
-      query.hidden=isDate; from.hidden=!isDate; to.hidden=!isDate;
-      query.placeholder=state.mode==="name"?"Enter name":"Enter text to find";
-      query.value=state.query;
-      from.value=state.from; to.value=state.to;
-    }
-    mode.addEventListener("change",updateMode);
-    query.addEventListener("input",()=>{state.query=query.value;});
-    from.addEventListener("change",()=>{state.from=from.value;});
-    to.addEventListener("change",()=>{state.to=to.value;});
-    apply.addEventListener("click",()=>{state.query=query.value.trim();state.from=from.value;state.to=to.value;state.mode=mode.value;state.applied=true;state.page=1;rerender();});
-    clear.addEventListener("click",()=>{state.query="";state.from="";state.to="";state.applied=false;state.page=1;query.value="";from.value="";to.value="";mode.value="name";updateMode();rerender();});
-    size.addEventListener("change",()=>{state.size=Number(size.value)||10;state.page=1;rerender();});
-    tools.append(mode,query,from,to,apply,clear,size);
-    parent.insertBefore(tools,list);
-    updateMode();
+    query.addEventListener("input", () => state.query = query.value);
+    from.addEventListener("change", () => state.from = from.value);
+    to.addEventListener("change", () => state.to = to.value);
+    apply.addEventListener("click", () => {
+      state.mode=mode.value; state.query=query.value.trim(); state.from=from.value; state.to=to.value;
+      state.applied=true; state.page=1; rerender();
+    });
+    clear.addEventListener("click", () => {
+      state.query=""; state.from=""; state.to=""; state.applied=false; state.page=1; mode.value="name";
+      query.value=""; from.value=""; to.value=""; query.hidden=false; from.hidden=true; to.hidden=true; rerender();
+    });
+    size.addEventListener("change", () => { state.size=Number(size.value)||10; state.page=1; rerender(); });
+    toggle.dataset.bound = "1";
   }
-
   if (!pages) {
     count=document.createElement("div"); count.id=listId+"SearchCount"; count.className="search-count";
     pages=document.createElement("div"); pages.id=listId+"PageTools"; pages.className="page-tools";
-    parent.insertBefore(count,list.nextSibling);
-    parent.insertBefore(pages,count.nextSibling);
+    parent.insertBefore(count,list); parent.insertBefore(pages,list);
   }
+  mode.value=state.mode; size.value=String(state.size);
   return {list,tools,pages,count,state};
 }
 
@@ -1016,6 +1030,8 @@ async function addPhotos() {
 
 async function renderPhotos() {
   const list=document.getElementById("photosList");
+  /* Create search and pagination controls even while the encrypted gallery is locked. */
+  prepareListTools("photosList", renderPhotos);
   if(!appPassword){list.textContent="Unlock MySpace to view your encrypted photos.";return;}
   const prepared=[];
   for(const record of (await getAll("photos")).reverse()){
@@ -1034,6 +1050,264 @@ async function renderPhotos() {
     const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{await removeRecord("photos",photo.id);await renderPhotos();};
     el.append(img,name,date,del);target.append(el);
   },renderPhotos);
+}
+
+/* Camera capture and multi-page document scanning */
+let mySpaceScanPages = [];
+
+function updateScanStatus(message) {
+  const status = document.getElementById("scanStatus");
+  if (status) status.textContent = message;
+}
+
+async function saveCameraPicture() {
+  if (!requireDataPassword()) return;
+  const input = document.getElementById("cameraFileInput");
+  const file = input.files && input.files[0];
+  if (!file) return alert("Take a picture first.");
+  try {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const defaultName = "Camera-" + new Date().toISOString().replace(/[:.]/g,"-") + (file.type === "image/png" ? ".png" : ".jpg");
+    const chosen = prompt("Name this picture:", defaultName);
+    if (chosen === null) return;
+    const name = chosen.trim() || defaultName;
+    await savePrivateRecord("files", {
+      name: /\.[a-z0-9]{2,5}$/i.test(name) ? name : name + (file.type === "image/png" ? ".png" : ".jpg"),
+      type: file.type || "image/jpeg",
+      bytes,
+      kind: "camera-image",
+      created: new Date().toISOString()
+    });
+    input.value = "";
+    await renderFiles();
+    alert("Picture encrypted and saved in My Files.");
+  } catch (error) {
+    console.error("Camera picture save failed:", error);
+    alert("Could not encrypt or save this picture.");
+  }
+}
+
+async function addScanPages() {
+  if (!requireDataPassword()) return;
+  const input = document.getElementById("scanPageInput");
+  const selected = Array.from(input.files || []).filter(file => file.type.startsWith("image/"));
+  if (!selected.length) return alert("Capture or select at least one page first.");
+  try {
+    for (const file of selected) {
+      mySpaceScanPages.push({ file, name: file.name || "Scan page" });
+    }
+    input.value = "";
+    updateScanStatus(mySpaceScanPages.length + " page(s) ready to combine into one PDF.");
+  } catch (error) {
+    console.error("Adding scan pages failed:", error);
+    alert("Could not add the selected scan pages.");
+  }
+}
+
+function clearScanPages() {
+  mySpaceScanPages = [];
+  const input = document.getElementById("scanPageInput");
+  if (input) input.value = "";
+  updateScanStatus("No scan pages selected.");
+}
+
+function loadImageForPDF(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const maxSide = 2200;
+        const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("Canvas is unavailable.");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          if (!blob) return reject(new Error("Could not convert a scan page to JPEG. Try taking the picture again."));
+          blob.arrayBuffer().then(buffer => resolve({
+            width: canvas.width,
+            height: canvas.height,
+            jpeg: new Uint8Array(buffer)
+          })).catch(reject);
+        }, "image/jpeg", 0.86);
+      } catch (error) { reject(error); }
+    };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("A scan page could not be opened. Try a JPEG or PNG image.")); };
+    image.src = url;
+  });
+}
+
+function asciiBytes(value) { return new TextEncoder().encode(value); }
+
+function joinByteArrays(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
+}
+
+function buildImagePDF(pages) {
+  if (!Array.isArray(pages) || !pages.length) throw new Error("At least one page is required.");
+  const objects = [];
+  const pageRefs = pages.map((_, index) => 3 + index * 3);
+  objects[1] = asciiBytes("<< /Type /Catalog /Pages 2 0 R >>");
+  objects[2] = asciiBytes("<< /Type /Pages /Kids [" + pageRefs.map(id => id + " 0 R").join(" ") + "] /Count " + pages.length + " >>");
+
+  pages.forEach((page, index) => {
+    const pageId = 3 + index * 3;
+    const contentId = pageId + 1;
+    const imageId = pageId + 2;
+    const pageW = 595.28, pageH = 841.89, margin = 24;
+    const scale = Math.min((pageW - margin * 2) / page.width, (pageH - margin * 2) / page.height);
+    const drawW = page.width * scale, drawH = page.height * scale;
+    const x = (pageW - drawW) / 2, y = (pageH - drawH) / 2;
+    const content = asciiBytes("q\n" + drawW.toFixed(3) + " 0 0 " + drawH.toFixed(3) + " " + x.toFixed(3) + " " + y.toFixed(3) + " cm\n/Im0 Do\nQ\n");
+    objects[pageId] = asciiBytes("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pageW + " " + pageH + "] /Resources << /XObject << /Im0 " + imageId + " 0 R >> >> /Contents " + contentId + " 0 R >>");
+    objects[contentId] = joinByteArrays([asciiBytes("<< /Length " + content.length + " >>\nstream\n"), content, asciiBytes("endstream")]);
+    objects[imageId] = joinByteArrays([asciiBytes("<< /Type /XObject /Subtype /Image /Width " + page.width + " /Height " + page.height + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " + page.jpeg.length + " >>\nstream\n"), page.jpeg, asciiBytes("\nendstream")]);
+  });
+
+  const chunks = [asciiBytes("%PDF-1.4\n%MySpace\n")];
+  const offsets = [0];
+  let byteOffset = chunks[0].length;
+  for (let id = 1; id < objects.length; id++) {
+    const objectBytes = joinByteArrays([asciiBytes(id + " 0 obj\n"), objects[id], asciiBytes("\nendobj\n")]);
+    offsets[id] = byteOffset;
+    chunks.push(objectBytes);
+    byteOffset += objectBytes.length;
+  }
+  const xrefOffset = byteOffset;
+  let xref = "xref\n0 " + objects.length + "\n0000000000 65535 f \n";
+  for (let id = 1; id < objects.length; id++) xref += String(offsets[id]).padStart(10,"0") + " 00000 n \n";
+  xref += "trailer\n<< /Size " + objects.length + " /Root 1 0 R >>\nstartxref\n" + xrefOffset + "\n%%EOF";
+  chunks.push(asciiBytes(xref));
+  return new Blob(chunks, { type: "application/pdf" });
+}
+
+async function createScannedPDF() {
+  if (!requireDataPassword()) return;
+  if (!mySpaceScanPages.length) return alert("Add at least one scan page before creating a PDF.");
+  const defaultName = "Scanned-Document-" + new Date().toISOString().slice(0,10) + ".pdf";
+  const chosen = prompt("Name your scanned PDF:", defaultName);
+  if (chosen === null) return;
+  const cleanName = chosen.trim() || defaultName;
+  const name = cleanName.toLowerCase().endsWith(".pdf") ? cleanName : cleanName + ".pdf";
+  try {
+    updateScanStatus("Preparing " + mySpaceScanPages.length + " page(s)…");
+    const pages = [];
+    for (let i = 0; i < mySpaceScanPages.length; i++) {
+      updateScanStatus("Processing page " + (i + 1) + " of " + mySpaceScanPages.length + "…");
+      pages.push(await loadImageForPDF(mySpaceScanPages[i].file));
+    }
+    const pdf = buildImagePDF(pages);
+    const bytes = Array.from(new Uint8Array(await pdf.arrayBuffer()));
+    await savePrivateRecord("files", {
+      name,
+      type: "application/pdf",
+      bytes,
+      kind: "scanned-pdf",
+      pageCount: pages.length,
+      created: new Date().toISOString()
+    });
+    const pageCount = pages.length;
+    clearScanPages();
+    await renderFiles();
+    updateScanStatus("Saved " + name + " (" + pageCount + " pages) with encryption.");
+    alert("Your " + pageCount + "-page PDF was encrypted and saved in My Files.");
+  } catch (error) {
+    console.error("PDF creation failed:", error);
+    updateScanStatus("PDF creation failed. Your selected pages are still available to retry.");
+    alert(error.message || "Could not create the PDF. Try JPEG or PNG scan images.");
+  }
+}
+
+/* Files export — exports decrypted copies without changing encrypted local records. */
+function downloadExportBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename || "MySpace-export";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function exportOneFile(file) {
+  if (!file || !Array.isArray(file.bytes)) return alert("This file could not be exported.");
+  const blob = new Blob([new Uint8Array(file.bytes)], {type:file.type || "application/octet-stream"});
+  downloadExportBlob(blob, file.name || "MySpace-file");
+}
+
+function zipCRC32(bytes) {
+  let crc = 0xffffffff;
+  for (let i=0; i<bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let j=0; j<8; j++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function makeStoredZip(entries) {
+  const encoder = new TextEncoder();
+  const localParts = [], centralParts = [];
+  let offset = 0;
+  const u16 = n => [n & 255, (n >>> 8) & 255];
+  const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  for (const entry of entries) {
+    const name = encoder.encode(entry.name);
+    const data = entry.bytes instanceof Uint8Array ? entry.bytes : new Uint8Array(entry.bytes);
+    const crc = zipCRC32(data);
+    const local = new Uint8Array([
+      ...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...name
+    ]);
+    localParts.push(local, data);
+    const central = new Uint8Array([
+      ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0),
+      ...u16(0), ...u16(0), ...u32(0), ...u32(offset), ...name
+    ]);
+    centralParts.push(central);
+    offset += local.length + data.length;
+  }
+  const centralSize = centralParts.reduce((n, part) => n + part.length, 0);
+  const end = new Uint8Array([
+    ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(entries.length), ...u16(entries.length),
+    ...u32(centralSize), ...u32(offset), ...u16(0)
+  ]);
+  return new Blob([...localParts, ...centralParts, end], {type:"application/zip"});
+}
+
+async function exportAllFilesZip() {
+  if (!requireDataPassword()) return;
+  try {
+    const records = (await getAll("files")).reverse();
+    const entries = [];
+    for (const record of records) {
+      let file;
+      if (record.encrypted) file = await decryptPrivateRecord(record);
+      else if (record.blob) file = {name:record.name, type:record.type, bytes:Array.from(new Uint8Array(await record.blob.arrayBuffer()))};
+      else continue;
+      if (!Array.isArray(file.bytes)) continue;
+      let filename = String(file.name || "File").replace(/[\\/:*?"<>|]/g, "_").trim() || "File";
+      entries.push({name:filename, bytes:new Uint8Array(file.bytes)});
+    }
+    if (!entries.length) return alert("There are no files to export.");
+    const zip = makeStoredZip(entries);
+    downloadExportBlob(zip, "MySpace-Files-" + new Date().toISOString().slice(0,10) + ".zip");
+    alert(entries.length + " file(s) exported. The ZIP contains unencrypted copies; keep it somewhere safe.");
+  } catch (error) {
+    console.error("Files export failed:", error);
+    alert("Could not export files. Unlock MySpace and try again.");
+  }
 }
 
 /* Files */
@@ -1068,6 +1342,8 @@ async function addFiles() {
 
 async function renderFiles() {
   const list=document.getElementById("filesList");
+  /* Create search and pagination controls even while the encrypted file list is locked. */
+  prepareListTools("filesList", renderFiles);
   if(!appPassword){list.textContent="Unlock MySpace to view your encrypted files.";return;}
   const prepared=[];
   for(const record of (await getAll("files")).reverse()){
@@ -1083,8 +1359,10 @@ async function renderFiles() {
     const name=document.createElement("p");name.textContent=file.name||"File";
     const date=document.createElement("small");date.textContent=file.created?new Date(file.created).toLocaleString():"";
     const open=document.createElement("button");open.textContent="Open";open.onclick=()=>{const blob=new Blob([new Uint8Array(file.bytes||[])],{type:file.type||"application/octet-stream"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener";link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);};
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{await removeRecord("files",file.id);await renderFiles();};
-    el.append(name,date,open,del);target.append(el);
+    const exportButton=document.createElement("button");exportButton.className="secondary";exportButton.textContent="Export";exportButton.onclick=()=>exportOneFile(file);
+    const rename=document.createElement("button");rename.className="secondary";rename.textContent="Rename";rename.onclick=async()=>{const next=prompt("Rename this file:",file.name||"File");if(next===null)return;const clean=next.trim();if(!clean)return alert("A file name is required.");const encrypted=await encryptPrivateRecord({...file,name:clean});await putRecord("files",{id:file.id,...encrypted});await renderFiles();};
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{if(confirm("Delete this file?")){await removeRecord("files",file.id);await renderFiles();}};
+    el.append(name,date,open,exportButton,rename,del);target.append(el);
   },renderFiles);
 }
 
@@ -1754,6 +2032,8 @@ document.addEventListener("visibilitychange", () => {
     notesEncryptionKey = null;
     vaultKey = null;
     vaultPin = null;
+    mySpaceScanPages = [];
+    updateScanStatus("No scan pages selected.");
     ["notesList", "photosList", "filesList", "remindersList", "secretsList"].forEach(id => {
       const element = document.getElementById(id);
       if (element) element.innerHTML = "";
