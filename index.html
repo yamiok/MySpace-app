@@ -82,6 +82,26 @@ button.secondary,.button.secondary {
   background:var(--light);color:var(--blue);
 }
 button.danger { background:#fff0f0;color:var(--danger); }
+.delete-shield {
+  margin-top:18px; padding:15px; border:1px solid #f0c5c8;
+  border-radius:16px; background:#fff8f8;
+}
+.delete-shield p { margin:7px 0 12px; }
+.delete-modal {
+  position:fixed; inset:0; z-index:9999; display:none;
+  align-items:center; justify-content:center; padding:20px;
+  background:rgba(12,25,43,.72);
+}
+.delete-modal.open { display:flex; }
+.delete-dialog {
+  width:min(100%,430px); padding:22px; border-radius:20px;
+  background:white; color:var(--text); box-shadow:0 18px 60px rgba(0,0,0,.3);
+}
+.delete-dialog h2 { margin:0 0 10px; color:var(--danger); }
+.delete-dialog input { width:100%; margin:10px 0 14px; }
+.delete-actions { display:flex; gap:10px; }
+.delete-actions button { flex:1; }
+.delete-confirm:disabled { opacity:.4; cursor:not-allowed; }
 input,textarea,select {
   display:block;width:100%;padding:13px;margin:9px 0;
   border:1px solid var(--border);border-radius:12px;
@@ -276,6 +296,8 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
       <textarea id="secretValue" placeholder="Private information"></textarea>
       <button onclick="saveSecret()">Save Secret</button>
       <div id="secretsList"></div>
+      <button class="secondary" onclick="exportPrivateVault()">Export Private Information</button>
+      <p class="muted">Exports only encrypted Private Vault entries. Your master password and six-digit PIN are required to unlock the exported data.</p>
       <button class="secondary" onclick="lockVault()">Lock Vault</button>
     </div>
   </section>
@@ -288,10 +310,26 @@ footer { text-align:center;color:var(--muted);font-size:12px;padding:22px; }
     </div>
     <button class="secondary" onclick="setAppPassword()">Set or Change App Password</button>
     <button class="secondary" onclick="lockApp()">Lock MySpace</button>
-    <button class="danger" onclick="clearAllData()">Delete All MySpace Data</button>
-    <p class="muted">Deleting data is permanent. Export anything you need first.</p>
+    <div class="delete-shield">
+      <strong>Danger zone</strong>
+      <p class="muted">This deletes Notes, Photos, Files and Reminders only. Your Private Vault entries and vault credentials are excluded and will remain untouched.</p>
+      <button class="danger" type="button" onclick="clearAllData()">Open Delete Protection</button>
+    </div>
   </section>
 </main>
+
+<div id="deleteProtection" class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteProtectionTitle">
+  <div class="delete-dialog">
+    <h2 id="deleteProtectionTitle">⚠️ Delete regular MySpace data?</h2>
+    <p>This permanently deletes Notes, Photos, Files and Reminders only. <strong>Private Vault entries and vault credentials will not be deleted.</strong> This cannot be undone.</p>
+    <p>To unlock the delete button, type <strong>DELETE MYSPACE</strong> below.</p>
+    <input id="deleteConfirmationText" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Type DELETE MYSPACE" oninput="validateDeleteConfirmation()">
+    <div class="delete-actions">
+      <button type="button" class="secondary" onclick="cancelDeleteAllData()">Cancel</button>
+      <button id="confirmDeleteButton" type="button" class="danger delete-confirm" disabled onclick="executeDeleteAllData()">Delete Everything</button>
+    </div>
+  </div>
+</div>
 
 <nav class="bottom">
   <button class="selected" onclick="goHome(this)">🏠<br>Home</button>
@@ -624,44 +662,80 @@ function goHome(button) {
   button.classList.add("selected");
 }
 
-/* SEARCH + PAGINATION — runs locally on decrypted in-memory records only. */
+/* SEARCH + PAGINATION — local search on decrypted in-memory records only. */
 const mySpaceListState = {};
 const mySpaceListUrls = {};
 
 function prepareListTools(listId, rerender) {
   const list = document.getElementById(listId);
   const parent = list.parentNode;
+  let toggle = document.getElementById(listId + "SearchButton");
   let tools = document.getElementById(listId + "SearchTools");
   let pages = document.getElementById(listId + "PageTools");
   let count = document.getElementById(listId + "SearchCount");
-  if (!mySpaceListState[listId]) mySpaceListState[listId] = { name:"", text:"", from:"", to:"", size:10, page:1 };
+  if (!mySpaceListState[listId]) mySpaceListState[listId] = { mode:"name", query:"", from:"", to:"", size:10, page:1, applied:false, open:false };
   const state = mySpaceListState[listId];
+
+  if (!toggle) {
+    toggle = document.createElement("button");
+    toggle.id = listId + "SearchButton";
+    toggle.type = "button";
+    toggle.className = "secondary";
+    toggle.textContent = "Search";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", () => {
+      state.open = !state.open;
+      tools.hidden = !state.open;
+      toggle.setAttribute("aria-expanded", String(state.open));
+      toggle.textContent = state.open ? "Close Search" : "Search";
+    });
+    parent.insertBefore(toggle, list);
+  }
 
   if (!tools) {
     tools = document.createElement("div");
     tools.id = listId + "SearchTools";
     tools.className = "search-tools";
-    const name = document.createElement("input");
-    name.type = "search"; name.placeholder = "Search by name"; name.setAttribute("aria-label", "Search by name");
-    const text = document.createElement("input");
-    text.type = "search"; text.placeholder = "Search text"; text.setAttribute("aria-label", "Search text");
-    text.className = "search-wide";
-    const from = document.createElement("input");
-    from.type = "date"; from.setAttribute("aria-label", "From date");
-    const to = document.createElement("input");
-    to.type = "date"; to.setAttribute("aria-label", "To date");
-    const size = document.createElement("select");
-    size.setAttribute("aria-label", "Records per page");
-    [10,20,50,100].forEach(n => { const o=document.createElement("option"); o.value=String(n); o.textContent=n+" per page"; size.append(o); });
-    size.className = "search-wide";
-    name.addEventListener("input", () => { state.name=name.value; state.page=1; rerender(); });
-    text.addEventListener("input", () => { state.text=text.value; state.page=1; rerender(); });
-    from.addEventListener("change", () => { state.from=from.value; state.page=1; rerender(); });
-    to.addEventListener("change", () => { state.to=to.value; state.page=1; rerender(); });
-    size.addEventListener("change", () => { state.size=Number(size.value)||10; state.page=1; rerender(); });
-    tools.append(name,text,from,to,size);
+    tools.hidden = true;
+
+    const mode = document.createElement("select");
+    mode.setAttribute("aria-label", "Search by");
+    [["name","Name"],["text","Text"],["date","Date"]].forEach(([value,label]) => {
+      const option=document.createElement("option"); option.value=value; option.textContent="Search by "+label; mode.append(option);
+    });
+    mode.value=state.mode;
+    mode.className="search-wide";
+
+    const query = document.createElement("input");
+    query.type="search"; query.placeholder="Enter name"; query.setAttribute("aria-label","Search query"); query.className="search-wide";
+    const from = document.createElement("input"); from.type="date"; from.setAttribute("aria-label","From date");
+    const to = document.createElement("input"); to.type="date"; to.setAttribute("aria-label","To date");
+    const apply = document.createElement("button"); apply.type="button"; apply.textContent="Apply Search";
+    const clear = document.createElement("button"); clear.type="button"; clear.className="secondary"; clear.textContent="Clear";
+    const size = document.createElement("select"); size.setAttribute("aria-label","Records per page");
+    [10,20,50,100].forEach(n=>{const o=document.createElement("option");o.value=String(n);o.textContent=n+" per page";size.append(o);});
+    size.className="search-wide";
+
+    function updateMode() {
+      state.mode=mode.value;
+      const isDate=state.mode==="date";
+      query.hidden=isDate; from.hidden=!isDate; to.hidden=!isDate;
+      query.placeholder=state.mode==="name"?"Enter name":"Enter text to find";
+      query.value=state.query;
+      from.value=state.from; to.value=state.to;
+    }
+    mode.addEventListener("change",updateMode);
+    query.addEventListener("input",()=>{state.query=query.value;});
+    from.addEventListener("change",()=>{state.from=from.value;});
+    to.addEventListener("change",()=>{state.to=to.value;});
+    apply.addEventListener("click",()=>{state.query=query.value.trim();state.from=from.value;state.to=to.value;state.mode=mode.value;state.applied=true;state.page=1;rerender();});
+    clear.addEventListener("click",()=>{state.query="";state.from="";state.to="";state.applied=false;state.page=1;query.value="";from.value="";to.value="";mode.value="name";updateMode();rerender();});
+    size.addEventListener("change",()=>{state.size=Number(size.value)||10;state.page=1;rerender();});
+    tools.append(mode,query,from,to,apply,clear,size);
     parent.insertBefore(tools,list);
+    updateMode();
   }
+
   if (!pages) {
     count=document.createElement("div"); count.id=listId+"SearchCount"; count.className="search-count";
     pages=document.createElement("div"); pages.id=listId+"PageTools"; pages.className="page-tools";
@@ -680,14 +754,20 @@ function renderPagedRecords(listId, records, renderItem, rerender) {
   mySpaceListUrls[listId] = [];
   const norm = value => String(value ?? "").toLocaleLowerCase();
   const filtered = records.filter(record => {
+    if (!state.applied) return true;
     const nameValue = norm(record.title || record.name || "");
-    const allText = norm(Object.entries(record).filter(([k,v]) => !["bytes","audio","blob"].includes(k) && (typeof v === "string" || typeof v === "number")).map(([,v])=>v).join(" "));
-    if (state.name && !nameValue.includes(norm(state.name))) return false;
-    if (state.text && !allText.includes(norm(state.text))) return false;
-    const dateValue = record.created || record.date || "";
-    const day = dateValue ? String(dateValue).slice(0,10) : "";
-    if (state.from && (!day || day < state.from)) return false;
-    if (state.to && (!day || day > state.to)) return false;
+    const allText = norm(Object.entries(record).filter(([k,v]) => !["bytes","audio","blob","id"].includes(k) && (typeof v === "string" || typeof v === "number")).map(([,v])=>v).join(" "));
+    if (state.mode === "name") return !state.query || nameValue.includes(norm(state.query));
+    if (state.mode === "text") return !state.query || allText.includes(norm(state.query));
+    if (state.mode === "date") {
+      const dateValue = record.created || record.date || "";
+      const day = dateValue ? String(dateValue).slice(0,10) : "";
+      if (!state.from && !state.to) return true;
+      if (!day) return false;
+      if (state.from && day < state.from) return false;
+      if (state.to && day > state.to) return false;
+      return true;
+    }
     return true;
   });
   const pageCount = Math.max(1, Math.ceil(filtered.length / state.size));
@@ -1290,10 +1370,64 @@ async function renderSecrets() {
     const reveal=document.createElement("button");reveal.className="secondary";reveal.textContent="Reveal";let visible=false;
     reveal.onclick=()=>{if(!vaultKey)return;if(!visible){const pin=prompt("Enter your exactly six-digit PIN to reveal this information.");if(pin===null)return;if(!/^\d{6}$/.test(pin))return alert("PIN must contain exactly six digits.");if(pin!==vaultPin)return alert("Incorrect PIN. Information remains hidden.");visible=true;value.textContent=secret.value;reveal.textContent="Hide";}else{visible=false;value.textContent="••••••••••••";reveal.textContent="Reveal";}};
     const edit=document.createElement("button");edit.className="secondary";edit.textContent="Edit";edit.onclick=async()=>{if(!vaultKey)return;const newTitle=prompt("Edit name:",secret.title);if(newTitle===null)return;const newValue=prompt("Edit private information:",secret.value);if(newValue===null)return;const newCategory=prompt("Category: Passwords, Recovery, Personal, Property, Other",secret.category);if(newCategory===null)return;if(!VAULT_CATEGORIES.includes(newCategory))return alert("Invalid category.");if(!newTitle.trim()||!newValue)return alert("Name and information cannot be empty.");try{const encrypted=await encryptText(JSON.stringify({title:newTitle.trim(),value:newValue,category:newCategory}),vaultKey);await updateSecretRecord({...encrypted,id:item.id,created:item.created||""});await renderSecrets();alert("Information updated.");}catch(error){alert("Could not update this information.");}};
-    const del=document.createElement("button");del.className="danger";del.textContent="Delete";del.onclick=async()=>{if(confirm("Permanently delete this secret?")){await removeRecord("secrets",item.id);await renderSecrets();}};
+    const del=document.createElement("button");del.className="danger";del.textContent="Delete this entry";del.onclick=async()=>{if(!vaultKey)return;const approved=confirm('Permanently delete only "'+(secret.title||"this entry")+'"?\n\nNo other Private Vault entries will be deleted.');if(!approved)return;try{await removeRecord("secrets",item.id);await renderSecrets();}catch(error){alert("This entry could not be deleted. Please try again.");}};
     const date=document.createElement("small");date.textContent=secret.created?new Date(secret.created).toLocaleString():"";
     el.append(heading,category,value,reveal,edit,del,date);target.append(el);
   },renderSecrets);
+}
+
+async function exportPrivateVault() {
+  if (!vaultKey) {
+    alert("Unlock the Private Vault before exporting.");
+    return;
+  }
+
+  try {
+    // Export only encrypted Private Vault records and the metadata needed
+    // to unlock them. No Notes, Photos, Files, Reminders, or app settings
+    // are included in this file.
+    const records = await getAll("secrets");
+    const salt = await getSetting("vaultSalt");
+    const verifier = await getSetting("vaultVerifier");
+
+    if (!salt || !verifier) {
+      throw new Error("Private Vault recovery metadata is missing.");
+    }
+
+    for (const record of records) {
+      if (!Array.isArray(record.iv) || !Array.isArray(record.data)) {
+        throw new Error("A Private Vault record is not in the expected encrypted format.");
+      }
+    }
+
+    const exportData = {
+      format: "MySpace-Private-Vault-Export",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      encryption: "AES-GCM-256 / PBKDF2-SHA-256",
+      vaultSalt: salt,
+      vaultVerifier: verifier,
+      records: records
+    };
+
+    const blob = new Blob(
+      [JSON.stringify(exportData, null, 2)],
+      { type: "application/json" }
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = "MySpace-Private-Vault-" + stamp + ".json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    alert("Encrypted Private Vault export created. Keep this file private and remember your master password and six-digit PIN.");
+  } catch (error) {
+    console.error("Private Vault export failed:", error);
+    alert("Could not export the Private Vault. No data was deleted or changed.");
+  }
 }
 
 function lockVault() {
@@ -1370,23 +1504,60 @@ async function setAppPassword() {
 
 /* DATA DELETION */
 
-async function clearAllData() {
-  if (!confirm("Delete ALL MySpace data on this device? This cannot be undone.")) {
-    return;
+function clearAllData() {
+  // Opening the protection dialog never deletes data.
+  const modal = document.getElementById("deleteProtection");
+  const input = document.getElementById("deleteConfirmationText");
+  const confirmButton = document.getElementById("confirmDeleteButton");
+  input.value = "";
+  confirmButton.disabled = true;
+  modal.classList.add("open");
+  setTimeout(() => input.focus(), 50);
+}
+
+function validateDeleteConfirmation() {
+  const input = document.getElementById("deleteConfirmationText");
+  const confirmButton = document.getElementById("confirmDeleteButton");
+  confirmButton.disabled = input.value.trim() !== "DELETE MYSPACE";
+}
+
+function cancelDeleteAllData() {
+  document.getElementById("deleteProtection").classList.remove("open");
+  document.getElementById("deleteConfirmationText").value = "";
+  document.getElementById("confirmDeleteButton").disabled = true;
+}
+
+async function executeDeleteAllData() {
+  validateDeleteConfirmation();
+  if (document.getElementById("confirmDeleteButton").disabled) return;
+  const finalCheck = confirm(
+    "FINAL CHECK: Delete Notes, Photos, Files and Reminders?\n\n" +
+    "Your Private Vault entries and vault credentials will NOT be deleted."
+  );
+  if (!finalCheck) return;
+
+  try {
+    if (!db) throw new Error("MySpace database is not available.");
+    // Deliberately clear only the four ordinary data stores. Never clear
+    // the secrets store or settings store, which contains the vault credentials.
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(
+        ["notes", "photos", "files", "reminders"],
+        "readwrite"
+      );
+      transaction.objectStore("notes").clear();
+      transaction.objectStore("photos").clear();
+      transaction.objectStore("files").clear();
+      transaction.objectStore("reminders").clear();
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error("Delete transaction failed."));
+      transaction.onabort = () => reject(transaction.error || new Error("Delete transaction was cancelled."));
+    });
+    alert("Notes, Photos, Files and Reminders were deleted. Your Private Vault was kept.");
+    location.reload();
+  } catch (error) {
+    alert("The selected data was not confirmed deleted. " + (error.message || "Please try again."));
   }
-
-  if (!confirm("Are you absolutely sure?")) return;
-
-  db.close();
-
-  await new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(DB_NAME);
-    request.onsuccess = resolve;
-    request.onerror = () => reject(request.error);
-  });
-
-  alert("MySpace data deleted.");
-  location.reload();
 }
 
 /* STARTUP */
