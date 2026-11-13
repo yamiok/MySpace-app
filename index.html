@@ -1129,11 +1129,12 @@ async function encryptPrivateRecord(value) {
   };
 }
 
-async function decryptPrivateRecord(record) {
-  if (!appPassword) throw new Error("MySpace is locked.");
+async function decryptPrivateRecord(record, passwordOverride = null) {
+  const password = passwordOverride === null ? appPassword : passwordOverride;
+  if (!password) throw new Error("MySpace is locked.");
   if (!record.encrypted) return record;
 
-  const key = await deriveKey(appPassword, new Uint8Array(record.salt));
+  const key = await deriveKey(password, new Uint8Array(record.salt));
   const decrypted = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: new Uint8Array(record.iv) },
     key,
@@ -1961,62 +1962,158 @@ function lockVault() {
 
 /* APP PASSWORD */
 
+/* Re-encrypt all app-password-protected records before committing a password change.
+   All record and password-setting writes share one IndexedDB transaction, so a
+   failed migration cannot leave a mixture of old- and new-password records. */
+async function migrateAndChangeAppPassword(oldPassword, newPassword) {
+  if (!db) throw new Error("MySpace database is not available.");
+  if (!crypto || !crypto.subtle) throw new Error("Secure encryption is unavailable.");
+
+  const stores = ["photos", "files", "reminders"];
+  const migrated = {};
+
+  for (const storeName of stores) {
+    const records = await getAll(storeName);
+    migrated[storeName] = [];
+    for (const record of records) {
+      let value;
+      if (record.encrypted) {
+        if (!oldPassword) throw new Error("Encrypted " + storeName + " exist but the current password is unavailable. No changes were made.");
+        value = await decryptPrivateRecord(record, oldPassword);
+      } else {
+        value = { ...record };
+        delete value.id;
+        delete value.encrypted;
+        delete value.salt;
+        delete value.iv;
+        delete value.data;
+        if ((storeName === "photos" || storeName === "files") && value.blob instanceof Blob) {
+          value.bytes = Array.from(new Uint8Array(await value.blob.arrayBuffer()));
+          delete value.blob;
+        }
+      }
+
+      const salt = randomBytes(16);
+      const iv = randomBytes(12);
+      let encryptedRecord;
+      if ((storeName === "photos" || storeName === "files") && Array.isArray(value.bytes)) {
+        const metadata = { ...value };
+        delete metadata.bytes;
+        const metadataBytes = encoder.encode(JSON.stringify(metadata));
+        const fileBytes = new Uint8Array(value.bytes);
+        const payload = new Uint8Array(4 + metadataBytes.length + fileBytes.length);
+        new DataView(payload.buffer).setUint32(0, metadataBytes.length, false);
+        payload.set(metadataBytes, 4);
+        payload.set(fileBytes, 4 + metadataBytes.length);
+        const key = await deriveKey(newPassword, salt);
+        const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, payload);
+        encryptedRecord = { encrypted: true, binaryEncrypted: true, format: 2,
+          salt: Array.from(salt), iv: Array.from(iv), data: new Uint8Array(cipher) };
+      } else {
+        const key = await deriveKey(newPassword, salt);
+        const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key,
+          encoder.encode(JSON.stringify(value)));
+        encryptedRecord = { encrypted: true, salt: Array.from(salt), iv: Array.from(iv),
+          data: Array.from(new Uint8Array(cipher)) };
+      }
+      migrated[storeName].push({ id: record.id, ...encryptedRecord });
+    }
+  }
+
+  // Prepare a new password-wrapped Notes key without changing settings yet.
+  const savedNotesSalt = await getSetting("notesKeySalt");
+  const savedNotesWrap = await getSetting("notesKeyWrap");
+  let rawNotesKey;
+  if (savedNotesSalt && savedNotesWrap) {
+    if (!oldPassword) throw new Error("Notes encryption is already configured but the current password is unavailable.");
+    const oldWrappingKey = await deriveKey(oldPassword, new Uint8Array(savedNotesSalt));
+    rawNotesKey = await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(savedNotesWrap.iv) },
+      oldWrappingKey, new Uint8Array(savedNotesWrap.data));
+  } else if (!savedNotesSalt && !savedNotesWrap) {
+    rawNotesKey = randomBytes(32);
+  } else {
+    throw new Error("Notes encryption settings are incomplete. No changes were made.");
+  }
+
+  const notesSalt = randomBytes(16);
+  const notesIV = randomBytes(12);
+  const newWrappingKey = await deriveKey(newPassword, notesSalt);
+  const wrappedNotesKey = await crypto.subtle.encrypt({ name: "AES-GCM", iv: notesIV },
+    newWrappingKey, rawNotesKey);
+  const appSalt = randomBytes(16);
+  const appHash = await hashAppPassword(newPassword, appSalt);
+
+  // Atomic commit: all migrated records and password metadata change together.
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction([...stores, "settings"], "readwrite");
+    let failed = false;
+    const fail = error => { if (!failed) { failed = true; try { tx.abort(); } catch (_) {} reject(error); } };
+    tx.onerror = () => fail(tx.error || new Error("Password migration transaction failed."));
+    tx.onabort = () => { if (!failed) reject(tx.error || new Error("Password migration was cancelled.")); };
+    tx.oncomplete = () => { if (!failed) resolve(); };
+
+    for (const storeName of stores) {
+      const objectStore = tx.objectStore(storeName);
+      for (const record of migrated[storeName]) objectStore.put(record);
+    }
+
+    const settingsStore = tx.objectStore("settings");
+    const request = settingsStore.getAll();
+    request.onerror = () => fail(request.error || new Error("Could not update password settings."));
+    request.onsuccess = () => {
+      try {
+        const existing = request.result;
+        const values = {
+          notesKeySalt: Array.from(notesSalt),
+          notesKeyWrap: { iv: Array.from(notesIV), data: Array.from(new Uint8Array(wrappedNotesKey)) },
+          appPasswordSalt: Array.from(appSalt),
+          appPasswordHash: appHash
+        };
+        for (const [key, value] of Object.entries(values)) {
+          const prior = existing.find(item => item.key === key);
+          if (prior) settingsStore.put({ ...prior, value });
+          else settingsStore.add({ key, value });
+        }
+        const legacy = existing.find(item => item.key === "appPassword");
+        if (legacy) settingsStore.delete(legacy.id);
+      } catch (error) { fail(error); }
+    };
+  });
+
+  notesEncryptionKey = await crypto.subtle.importKey("raw", rawNotesKey,
+    { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  appPassword = newPassword;
+}
+
 async function setAppPassword() {
   try {
     const currentHash = await getSetting("appPasswordHash");
     const currentSalt = await getSetting("appPasswordSalt");
     const legacyPassword = await getSetting("appPassword");
-
     let oldPassword = null;
 
     if (currentHash && currentSalt) {
       oldPassword = prompt("Enter your current app password");
-      if (!oldPassword) return;
-
+      if (oldPassword === null || oldPassword === "") return;
       const check = await hashAppPassword(oldPassword, currentSalt);
-
-      if (check !== currentHash) {
-        return alert("Incorrect password.");
-      }
-
+      if (check !== currentHash) return alert("Incorrect password. Nothing was changed.");
     } else if (legacyPassword) {
       oldPassword = prompt("Enter your current app password");
-
-      if (oldPassword !== legacyPassword) {
-        return alert("Incorrect password.");
-      }
+      if (oldPassword === null || oldPassword === "") return;
+      if (oldPassword !== legacyPassword) return alert("Incorrect password. Nothing was changed.");
     }
 
-    const next = prompt(
-      "Create a new app password (at least 10 characters)"
-    );
+    const next = prompt("Create a new app password (at least 10 characters)");
+    if (next === null) return;
+    if (next.length < 10) return alert("Password must be at least 10 characters.");
+    if (next === oldPassword) return alert("Choose a different password.");
 
-    if (!next || next.length < 10) {
-      return alert("Password must be at least 10 characters.");
-    }
-
-    if (oldPassword) {
-      await changeNotesEncryptionPassword(oldPassword, next);
-    } else {
-      await unlockNotesEncryptionKey(next);
-    }
-
-    const salt = randomBytes(16);
-    const hash = await hashAppPassword(next, salt);
-
-    await setting("appPasswordSalt", Array.from(salt));
-    await setting("appPasswordHash", hash);
-    await setting("appPassword", undefined);
-
-    appPassword = next;
-
-    alert("App password updated securely.");
-
+    await migrateAndChangeAppPassword(oldPassword, next);
+    alert("App password updated. Photos, Files, Reminders and Notes encryption were preserved with the new password.");
   } catch (error) {
-    alert(
-      "Password update failed. Your existing app password has not been changed. " +
-      (error.message || "")
-    );
+    console.error("App password migration failed:", error);
+    alert("Password update failed. The existing password and saved records were left unchanged. " +
+      (error.message || "Please try again."));
   }
 }
 
