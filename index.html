@@ -1948,15 +1948,50 @@ async function exportPrivateVault() {
   } catch(error){console.error("Private Vault encrypted export failed:",error);alert("Could not export the Private Vault. No plaintext export was created and no data was changed.");}
 }
 
+function clearVaultSensitiveInputs() {
+  ["masterNew", "pinNew", "pinConfirm", "masterLogin", "pinLogin", "secretTitle", "secretValue"]
+    .forEach(id => { const field = document.getElementById(id); if (field) field.value = ""; });
+  const list = document.getElementById("secretsList");
+  if (list) list.innerHTML = ""; // Also removes any expanded Private Vault edit forms.
+}
+
+function clearAllSensitiveInputs() {
+  clearVaultSensitiveInputs();
+  const ids = [
+    "appUnlock", "noteTitle", "noteText", "photoInput", "fileInput",
+    "cameraFileInput", "scanPageInput", "reminderTitle", "reminderDate",
+    "reminderDetails", "deleteConfirmationText",
+    "photosListSearchQuery", "photosListSearchFrom", "photosListSearchTo",
+    "filesListSearchQuery", "filesListSearchFrom", "filesListSearchTo",
+    "notesListSearchQuery", "notesListSearchFrom", "notesListSearchTo",
+    "remindersListSearchQuery", "remindersListSearchFrom", "remindersListSearchTo"
+  ];
+  ids.forEach(id => { const field = document.getElementById(id); if (field) field.value = ""; });
+
+  // Clear any dynamically-created sensitive editor fields as well.
+  document.querySelectorAll(".vault-edit-form input, .vault-edit-form textarea")
+    .forEach(field => { field.value = ""; });
+
+  // Reset local search state so private names or text are not retained in memory/UI.
+  if (typeof mySpaceListState !== "undefined") {
+    Object.values(mySpaceListState).forEach(state => {
+      state.query = ""; state.from = ""; state.to = "";
+      state.applied = false; state.page = 1; state.mode = "name"; state.open = false;
+    });
+  }
+  ["photosListSearchTools", "filesListSearchTools", "notesListSearchTools", "remindersListSearchTools"]
+    .forEach(id => { const element = document.getElementById(id); if (element) element.hidden = true; });
+  ["photosListSearchButton", "filesListSearchButton", "notesListSearchButton", "remindersListSearchButton"]
+    .forEach(id => { const button = document.getElementById(id); if (button) { button.textContent = "Search"; button.setAttribute("aria-expanded", "false"); } });
+}
+
 function lockVault() {
   vaultKey = null;
   vaultPin = null;
 
-  document.getElementById("vaultContent").classList.add("hidden");
-  document.getElementById("secretTitle").value = "";
-  document.getElementById("secretValue").value = "";
-  document.getElementById("secretsList").innerHTML = "";
-
+  const content = document.getElementById("vaultContent");
+  if (content) content.classList.add("hidden");
+  clearVaultSensitiveInputs();
   prepareVault();
 }
 
@@ -2249,9 +2284,11 @@ async function lockApp() {
   }
   appPassword = null;
   notesEncryptionKey = null;
+  clearAllSensitiveInputs();
   lockVault();
   for (const id of ["notesList", "photosList", "filesList", "remindersList"]) {
-    document.getElementById(id).innerHTML = "";
+    const element = document.getElementById(id);
+    if (element) element.innerHTML = "";
   }
   document.getElementById("lockScreen").style.display = "flex";
   document.getElementById("lockError").textContent = "Enter your app password to continue.";
@@ -2369,6 +2406,7 @@ document.addEventListener("visibilitychange", () => {
     notesEncryptionKey = null;
     vaultKey = null;
     vaultPin = null;
+    clearAllSensitiveInputs();
     mySpaceScanPages = [];
     updateScanStatus("No scan pages selected.");
     ["notesList", "photosList", "filesList", "remindersList", "secretsList"].forEach(id => {
